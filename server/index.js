@@ -9,7 +9,9 @@ import { createRateLimiter } from './rate-limit.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const distDir = path.resolve(__dirname, '..', 'dist')
 const PORT = Number(process.env.PORT) || 8787
-const HOST = process.env.HOST || '127.0.0.1'
+// Render sets RENDER=true and routes traffic to the container, so it must bind
+// to all interfaces even if HOST is not explicitly configured.
+const HOST = process.env.HOST || (process.env.RENDER ? '0.0.0.0' : '127.0.0.1')
 
 const MAX_ACTIVE_SCANS = Math.max(1, Number(process.env.MAX_ACTIVE_SCANS) || 4)
 const SCAN_LIMIT = Math.max(1, Number(process.env.SCAN_LIMIT) || 3)
