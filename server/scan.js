@@ -552,6 +552,25 @@ function traceroute(ip, emit, signal) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+function isPrivateIp(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number)
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    )
+  }
+  if (net.isIPv6(ip)) {
+    const value = ip.toLowerCase()
+    return value === '::1' || value.startsWith('fc') || value.startsWith('fd') || value.startsWith('fe80')
+  }
+  return false
+}
+
 /* Fallback for hosts without a traceroute binary (e.g. Render): ask the free
    Globalping API to run the measurement from a German probe and stream hops. */
 async function globalpingTraceroute(ip, onHop, signal) {
@@ -857,7 +876,7 @@ export async function runScan(input, emit, signal) {
     : { hops: [], ok: false }
 
   let hops = traceResult.hops
-  if (useTraceroute && (!traceResult.ok || !hops.length) && !isAborted(signal)) {
+  if (useTraceroute && (!traceResult.ok || !hops.length) && !isAborted(signal) && !isPrivateIp(primary.ip)) {
     emit({
       type: 'log',
       level: 'info',

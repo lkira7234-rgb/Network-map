@@ -137,7 +137,7 @@ server/
 
 - **GEO**: [ipwho.is](https://ipwho.is) с резервным [ip-api.com](http://ip-api.com).
 - **RDAP**: [rdap.org](https://rdap.org).
-- **Traceroute**: системные `tracert` (Windows) или `traceroute` (Linux/macOS).
+- **Traceroute**: системные `tracert` (Windows) или `traceroute` (Linux/macOS). Если утилиты нет (например, в контейнере Render), маршрут строится через бесплатный [Globalping](https://globalping.io) с немецкого пробника.
 
 Без интернета карта всё равно работает: DNS/порты/TLS/HTTP проверяются напрямую, а GEO и RDAP просто не появятся.
 
