@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: network-map
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22.12.0
+      - key: NODE_ENV
+        value: production
+      # Render terminates TLS in front of the service.
+      - key: TRUST_PROXY
+        value: "1"
+      # Render routes traffic to the container, so it must listen on all interfaces.
+      - key: HOST
+        value: 0.0.0.0
+      # Abuse protection: 3 scans per minute per IP, 4 concurrent scans globally.
+      - key: SCAN_LIMIT
+        value: "3"
+      - key: SCAN_WINDOW_MS
+        value: "60000"
+      - key: DEMO_LIMIT
+        value: "10"
+      - key: MAX_ACTIVE_SCANS
+        value: "4"

@@ -1,0 +1,41 @@
+{
+  "name": "network-map",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Network Map — 3D cyberpunk network topology scanner",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c magenta,cyan \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:web": "vite",
+    "dev:server": "node --watch server/index.js",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@fontsource/exo-2": "^5.1.1",
+    "@fontsource/jetbrains-mono": "^5.1.1",
+    "@fontsource/orbitron": "^5.1.1",
+    "@fontsource/rajdhani": "^5.1.1",
+    "@react-three/drei": "9.114.3",
+    "@react-three/fiber": "8.17.10",
+    "@react-three/postprocessing": "2.16.3",
+    "express": "^4.21.2",
+    "postprocessing": "6.36.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "0.169.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.169.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7"
+  }
+}
