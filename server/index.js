@@ -2,7 +2,7 @@ import express from 'express'
 import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { runScan } from './scan.js'
+import { runScan, normalizeTarget } from './scan.js'
 import { runDemo } from './demo.js'
 import { createRateLimiter } from './rate-limit.js'
 
@@ -139,6 +139,14 @@ app.post('/api/scan', async (req, res) => {
   const target = typeof req.body?.target === 'string' ? req.body.target.trim() : ''
   if (!target) {
     res.status(400).json({ error: 'Укажи домен или IP-адрес' })
+    return
+  }
+
+  // Reject malformed targets before spending the client's rate-limit slot.
+  try {
+    normalizeTarget(target)
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'Некорректная цель' })
     return
   }
 

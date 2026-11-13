@@ -62,8 +62,11 @@ export function Hud({
   const [traceroute, setTraceroute] = useState(true)
   const [geo, setGeo] = useState(true)
   const [, tick] = useState(0)
+  const [mobileTab, setMobileTab] = useState<'scan' | 'telemetry' | 'inspect'>('scan')
+  const [sheetOpen, setSheetOpen] = useState(true)
 
   const logRef = useRef<HTMLDivElement>(null)
+  const errorRef = useRef<HTMLDivElement>(null)
   const details = getSelectionDetails(model, selection)
   const counts = portCounts(model)
   const primary = model.ips.find((ip) => ip.primary) || model.ips[0]
@@ -79,20 +82,78 @@ export function Hud({
     if (el) el.scrollTop = el.scrollHeight
   }, [model.logs.length])
 
+  // Mobile: reveal the inspector as soon as a node is tapped.
+  useEffect(() => {
+    if (selection) {
+      setMobileTab('inspect')
+      setSheetOpen(true)
+    } else {
+      setMobileTab((tab) => (tab === 'inspect' ? 'scan' : tab))
+    }
+  }, [selection])
+
+  // Mobile: surface validation / scan errors instead of leaving the sheet closed.
+  useEffect(() => {
+    if (model.error) {
+      setMobileTab('scan')
+      setSheetOpen(true)
+      const id = window.setTimeout(() => {
+        errorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      }, 80)
+      return () => window.clearTimeout(id)
+    }
+  }, [model.error])
+
+  const pickTab = (tab: 'scan' | 'telemetry' | 'inspect') => {
+    if (mobileTab === tab && sheetOpen) {
+      setSheetOpen(false)
+      return
+    }
+    setMobileTab(tab)
+    setSheetOpen(true)
+  }
+
+  const startDemo = () => {
+    onDemo()
+    setSheetOpen(false)
+  }
+
   const submit = (event: FormEvent) => {
     event.preventDefault()
     const value = target.trim()
     if (!value) return
     onScan({ target: value, ports, traceroute, geo })
+    setSheetOpen(false)
   }
 
   const elapsed = model.stats?.durationMs ?? (model.startedAt ? Date.now() - model.startedAt : 0)
   const phaseLabel = model.demo && model.phase !== 'idle' ? 'DEMO' : STATUS[model.phase]
 
   return (
-    <div className="hud">
+    <div className={`hud mobile-tab-${mobileTab} ${sheetOpen ? 'sheet-open' : 'sheet-closed'}`}>
       <div className="scanlines" />
       <div className="cs-vignette" />
+
+      <header className="mobile-head">
+        <div className="mobile-head-row">
+          <div className="mobile-brand">
+            NETWORK<span>//</span>MAP
+          </div>
+          <div className="mobile-target">
+            <b>{model.host || 'NO TARGET'}</b>
+            <i>{primary?.ip || '—'}</i>
+          </div>
+          <span className={`mobile-phase ${model.phase}`}>
+            <i /> {phaseLabel}
+          </span>
+        </div>
+        <div className="mobile-stats">
+          <span><b>{model.ips.length}</b> IP</span>
+          <span className="open"><b>{counts.open}</b> ОТКР</span>
+          <span className="hops"><b>{model.hops.length}</b> ХОПЫ</span>
+          <span><b>{formatDuration(elapsed)}</b> ВРЕМЯ</span>
+        </div>
+      </header>
 
       <aside className="left-col">
         <div className="brand">
@@ -163,11 +224,11 @@ export function Hud({
               )}
             </button>
             {scanning ? (
-              <button type="button" className="btn danger" onClick={onStop}>
+              <button type="button" className="btn danger" onClick={() => { onStop(); setSheetOpen(false) }}>
                 СТОП
               </button>
             ) : (
-              <button type="button" className="btn ghost" onClick={onDemo}>
+              <button type="button" className="btn ghost" onClick={startDemo}>
                 ДЕМО
               </button>
             )}
@@ -194,7 +255,7 @@ export function Hud({
         </form>
 
         {model.error && (
-          <div className="panel error-panel">
+          <div className="panel error-panel" ref={errorRef}>
             <div className="panel-head">
               <span>SCAN ERROR</span>
               <span className="status-dot error" />
@@ -316,7 +377,7 @@ export function Hud({
           <p className="hero-sub">
             Введи домен или IP слева, выбери порты и запусти скан — топология соберётся в 3D прямо на глазах.
           </p>
-          <button type="button" className="hero-demo" onClick={onDemo}>
+          <button type="button" className="hero-demo" onClick={startDemo}>
             ▶ ОТКРЫТЬ ДЕМО-КАРТУ
           </button>
         </div>
@@ -348,6 +409,41 @@ export function Hud({
           <span>▸</span> {hover || 'наведи на узел'}
         </div>
       </div>
+
+      <nav className="mobile-dock" aria-label="Мобильные панели">
+        <button
+          type="button"
+          className={`dock-btn ${sheetOpen && mobileTab === 'scan' ? 'active' : ''}`}
+          onClick={() => pickTab('scan')}
+          aria-expanded={sheetOpen && mobileTab === 'scan'}
+        >
+          <span className="dock-index">01</span>
+          <span className="dock-label">СКАН</span>
+        </button>
+        <button
+          type="button"
+          className={`dock-btn ${sheetOpen && mobileTab === 'telemetry' ? 'active' : ''}`}
+          onClick={() => pickTab('telemetry')}
+          aria-expanded={sheetOpen && mobileTab === 'telemetry'}
+        >
+          <span className="dock-index">02</span>
+          <span className="dock-label">ДАННЫЕ</span>
+        </button>
+        <button
+          type="button"
+          className={`dock-btn ${sheetOpen && mobileTab === 'inspect' ? 'active' : ''}`}
+          onClick={() => pickTab('inspect')}
+          disabled={!details}
+          aria-expanded={sheetOpen && mobileTab === 'inspect'}
+        >
+          <span className="dock-index">03</span>
+          <span className="dock-label">ИНСПЕКТ</span>
+        </button>
+        <button type="button" className="dock-btn reset" onClick={onResetCamera}>
+          <span className="dock-icon">⟲</span>
+          <span className="dock-label">СБРОС</span>
+        </button>
+      </nav>
 
       <div className="legend">
         <span><i className="dot target" />TARGET</span>
