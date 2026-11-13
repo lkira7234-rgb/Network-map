@@ -362,7 +362,11 @@ export function objectSummary(state: ScanState): ObjectSummary | null {
     .join(' ')
     .toLowerCase()
   const edge = haystack ? matchProvider(haystack, EDGE_PROVIDERS) : null
-  const edgeName = edge || server || '—'
+  // A bare "Server: github.com" is not a CDN — only surface generic proxies.
+  const genericServer = /^(nginx|openresty|envoy|caddy|apache|httpd|microsoft-iis|iis|litespeed|varnish|traefik)\b/i.test(
+    server,
+  )
+  const edgeName = edge || (genericServer ? server : '—')
 
   const primary = primaryIp(state)
   const geo = primary?.geo
