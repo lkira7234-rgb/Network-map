@@ -44,6 +44,8 @@ const GEO_TIMEOUT = 5000
 const RDAP_TIMEOUT = 9000
 const TRACEROUTE_MAX_HOPS = 12
 const TRACEROUTE_BUDGET = 26000
+const GLOBALPING_BUDGET = 22000
+const GLOBALPING_POLL_MS = 1200
 const MAX_RESOLVED_IPS = 4
 const PORT_CONCURRENCY = 64
 
@@ -503,13 +505,14 @@ function traceroute(ip, emit, signal) {
       : ['-n', '-m', String(TRACEROUTE_MAX_HOPS), '-w', '1', '-q', '1', ip]
 
     let child
+    let spawnFailed = false
     try {
       child = spawn(isWin ? 'tracert' : 'traceroute', args, {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
       })
     } catch {
-      resolve([])
+      resolve({ hops: [], ok: false })
       return
     }
 
@@ -522,7 +525,7 @@ function traceroute(ip, emit, signal) {
       try {
         child.kill()
       } catch {}
-      resolve(hops)
+      resolve({ hops, ok: !spawnFailed })
     }
 
     const killTimer = setTimeout(finish, TRACEROUTE_BUDGET)
@@ -537,10 +540,70 @@ function traceroute(ip, emit, signal) {
       emit({ type: 'hop', ...parsed })
     })
 
-    child.once('error', finish)
+    child.once('error', (err) => {
+      // Render / minimal containers often lack tracert/traceroute entirely.
+      if (['ENOENT', 'EACCES', 'EPERM'].includes(err?.code)) spawnFailed = true
+      finish()
+    })
     child.once('close', finish)
     signal?.addEventListener('abort', finish, { once: true })
   })
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/* Fallback for hosts without a traceroute binary (e.g. Render): ask the free
+   Globalping API to run the measurement from a German probe and stream hops. */
+async function globalpingTraceroute(ip, onHop, signal) {
+  try {
+    const create = await fetch('https://api.globalping.io/v1/measurements', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'NetworkMap/1.0' },
+      body: JSON.stringify({
+        type: 'traceroute',
+        target: ip,
+        limit: 1,
+        locations: [{ country: 'DE' }],
+      }),
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!create.ok) return []
+    const { id } = await create.json()
+    if (!id) return []
+
+    const deadline = Date.now() + GLOBALPING_BUDGET
+    while (Date.now() < deadline) {
+      if (isAborted(signal)) return []
+      await sleep(GLOBALPING_POLL_MS)
+      if (isAborted(signal)) return []
+
+      const res = await fetch(`https://api.globalping.io/v1/measurements/${id}`, {
+        headers: { 'User-Agent': 'NetworkMap/1.0' },
+        signal: AbortSignal.timeout(8000),
+      })
+      if (!res.ok) continue
+      const data = await res.json()
+      if (data.status !== 'finished') continue
+
+      const hops = data.results?.[0]?.result?.hops || []
+      const parsedHops = []
+      hops.slice(0, TRACEROUTE_MAX_HOPS).forEach((hop, offset) => {
+        const rtts = (hop.timings || [])
+          .map((timing) => timing.rtt)
+          .filter((rtt) => Number.isFinite(rtt))
+        const parsed = {
+          index: offset + 1,
+          ip: hop.resolvedAddress || null,
+          rtt: rtts.length ? Math.round(Math.min(...rtts)) : null,
+          timeout: !hop.resolvedAddress,
+        }
+        parsedHops.push(parsed)
+        if (!isAborted(signal)) onHop({ type: 'hop', ...parsed })
+      })
+      return parsedHops
+    }
+  } catch {}
+  return []
 }
 
 function parseHopLine(line) {
@@ -707,7 +770,7 @@ export async function runScan(input, emit, signal) {
 
   const tracerouteTask = useTraceroute
     ? traceroute(primary.ip, onHop, signal)
-    : Promise.resolve([])
+    : Promise.resolve({ hops: [], ok: false })
 
   /* ---------- stats ---------- */
   const stats = {
@@ -789,7 +852,19 @@ export async function runScan(input, emit, signal) {
     await scanIp(entry)
   }
 
-  const hops = await tracerouteTask
+  const traceResult = useTraceroute
+    ? await tracerouteTask
+    : { hops: [], ok: false }
+
+  let hops = traceResult.hops
+  if (useTraceroute && (!traceResult.ok || !hops.length) && !isAborted(signal)) {
+    emit({
+      type: 'log',
+      level: 'info',
+      message: 'Локальный traceroute недоступен — строю маршрут через Globalping (DE)',
+    })
+    hops = await globalpingTraceroute(primary.ip, onHop, signal)
+  }
   stats.hops = hops.length
 
   await Promise.allSettled([...enrich, ...hopGeo, ...probeTasks])
