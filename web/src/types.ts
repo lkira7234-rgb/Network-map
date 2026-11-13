@@ -74,6 +74,8 @@ export interface IpEntry {
   ports: Record<number, PortInfo>
   tls?: (TlsInfo & { port: number }) | null
   http?: (HttpInfo & { port: number }) | null
+  /** Every HTTP probe for this IP, so multiple web ports do not overwrite each other. */
+  httpAll?: (HttpInfo & { port: number })[]
 }
 
 export interface HopInfo {
@@ -182,6 +184,40 @@ export interface SelectionDetails {
   rows: { label: string; value: string }[]
   notes?: { label: string; value: string }[]
   block?: { title: string; rows: { label: string; value: string }[] }
+}
+
+/* ------------------------------------------------------------------ */
+/*  object summary                                                     */
+/* ------------------------------------------------------------------ */
+
+export interface SummaryProvider {
+  label: string
+  value: string
+}
+
+export interface SummaryCert {
+  issuer: string
+  subject: string
+  protocol: string
+  days: number | null
+  validTo: string | null
+  expired: boolean
+  expiringSoon: boolean
+  altNames: number
+}
+
+export interface SummaryFlag {
+  key: string
+  label: string
+  hint: string
+  ok: boolean
+}
+
+export interface ObjectSummary {
+  providers: SummaryProvider[]
+  cert: SummaryCert | null
+  hygiene: SummaryFlag[]
+  hygieneOk: number
 }
 
 /* ------------------------------------------------------------------ */

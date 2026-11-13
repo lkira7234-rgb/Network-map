@@ -154,6 +154,9 @@ export async function runDemo(emit, signal) {
       'strict-transport-security': 'max-age=63072000; includeSubDomains; preload',
       'cf-ray': '8d42f00d1c0f-NRT',
       'content-type': 'text/html; charset=utf-8',
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'SAMEORIGIN',
+      'referrer-policy': 'strict-origin-when-cross-origin',
     },
   }, 70)
 

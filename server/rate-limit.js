@@ -17,7 +17,8 @@ export function createRateLimiter({ limit, windowMs }) {
   timer.unref?.()
 
   return {
-    /* Returns { ok: true } or { ok: false, retryAfter } without mutating state on reject. */
+    /* Returns { ok: true } or { ok: false, retryAfter } without mutating state on reject.
+       Every result also carries the remaining quota for RateLimit-* headers. */
     take(key) {
       const id = key || 'unknown'
       const now = Date.now()
@@ -25,12 +26,25 @@ export function createRateLimiter({ limit, windowMs }) {
 
       if (times.length >= limit) {
         const retryAfter = Math.max(1, Math.ceil((windowMs - (now - times[0])) / 1000))
-        return { ok: false, retryAfter }
+        return {
+          ok: false,
+          limit,
+          remaining: 0,
+          retryAfter,
+          resetAfter: retryAfter,
+        }
       }
 
       times.push(now)
       hits.set(id, times)
-      return { ok: true }
+      return {
+        ok: true,
+        limit,
+        remaining: Math.max(0, limit - times.length),
+        retryAfter: 0,
+        // Seconds until the oldest hit leaves the window and frees a slot.
+        resetAfter: Math.max(1, Math.ceil((times[0] + windowMs - now) / 1000)),
+      }
     },
 
     stop() {

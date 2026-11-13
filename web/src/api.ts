@@ -11,6 +11,24 @@ export interface ScanRequest {
   geo: boolean
 }
 
+export interface RateLimitInfo {
+  limit: number
+  remaining: number
+  resetAt: number | null
+}
+
+function readRateLimit(response: Response): RateLimitInfo | null {
+  const limit = Number(response.headers.get('ratelimit-limit'))
+  const remaining = Number(response.headers.get('ratelimit-remaining'))
+  if (!Number.isFinite(limit) || !Number.isFinite(remaining)) return null
+  const reset = Number(response.headers.get('ratelimit-reset'))
+  return {
+    limit,
+    remaining,
+    resetAt: Number.isFinite(reset) ? Date.now() + reset * 1000 : null,
+  }
+}
+
 async function readNdjson(
   response: Response,
   onEvent: (event: ScanEvent) => void,
@@ -71,6 +89,7 @@ export async function streamScan(
   request: ScanRequest,
   onEvent: (event: ScanEvent) => void,
   signal: AbortSignal,
+  onRateLimit?: (info: RateLimitInfo) => void,
 ) {
   const response = await fetch(`${API_BASE}/api/scan`, {
     method: 'POST',
@@ -78,6 +97,8 @@ export async function streamScan(
     body: JSON.stringify(request),
     signal,
   })
+  const rate = readRateLimit(response)
+  if (rate) onRateLimit?.(rate)
   await assertOk(response)
   await readNdjson(response, onEvent, signal)
 }

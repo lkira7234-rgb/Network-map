@@ -359,6 +359,8 @@ function pickHeaders(headers) {
   const keep = [
     'server', 'content-type', 'x-powered-by', 'strict-transport-security',
     'content-security-policy', 'via', 'x-cache', 'cf-ray', 'x-frame-options',
+    'x-content-type-options', 'referrer-policy', 'permissions-policy',
+    'x-vercel-id', 'x-served-by', 'x-amz-cf-id', 'x-nf-request-id',
   ]
   const out = {}
   for (const key of keep) {

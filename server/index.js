@@ -50,6 +50,7 @@ if (CORS_ORIGIN) {
       res.setHeader('Vary', 'Origin')
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+      res.setHeader('Access-Control-Expose-Headers', 'RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset, Retry-After')
       res.setHeader('Access-Control-Max-Age', '86400')
     }
     if (req.method === 'OPTIONS') {
@@ -118,10 +119,20 @@ async function streamNdjson(res, run) {
 
 let activeScans = 0
 
-function sendRateLimited(res, retryAfter) {
-  res.setHeader('Retry-After', String(retryAfter))
+// Standard RateLimit-* headers so the UI can show the remaining quota instead
+// of failing with an opaque 429.
+function setRateLimitHeaders(res, limit) {
+  res.setHeader('RateLimit-Limit', String(limit.limit))
+  res.setHeader('RateLimit-Remaining', String(limit.remaining))
+  res.setHeader('RateLimit-Reset', String(limit.resetAfter))
+}
+
+function sendRateLimited(res, limit) {
+  setRateLimitHeaders(res, limit)
+  res.setHeader('Retry-After', String(limit.retryAfter))
   res.status(429).json({
-    error: `Слишком много сканирований. Попробуй через ${retryAfter} с.`,
+    error: `Слишком много сканирований. Попробуй через ${limit.retryAfter} с.`,
+    retryAfter: limit.retryAfter,
   })
 }
 
@@ -151,12 +162,14 @@ app.post('/api/scan', async (req, res) => {
   }
 
   const limit = scanLimiter.take(req.ip)
+  setRateLimitHeaders(res, limit)
   if (!limit.ok) {
-    sendRateLimited(res, limit.retryAfter)
+    sendRateLimited(res, limit)
     return
   }
 
   if (activeScans >= MAX_ACTIVE_SCANS) {
+    res.setHeader('Retry-After', '5')
     res.status(429).json({ error: 'Слишком много одновременных сканирований. Попробуй чуть позже.' })
     return
   }
@@ -183,8 +196,9 @@ app.post('/api/scan', async (req, res) => {
 
 app.get('/api/demo', async (req, res) => {
   const limit = demoLimiter.take(req.ip)
+  setRateLimitHeaders(res, limit)
   if (!limit.ok) {
-    sendRateLimited(res, limit.retryAfter)
+    sendRateLimited(res, limit)
     return
   }
   await streamNdjson(res, (emit, signal) => runDemo(emit, signal))

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { Scene } from './components/Scene'
-import { Hud, type ScanFormValues } from './components/Hud'
+import { Hud } from './components/Hud'
 import { initialState } from './types'
 import { scanReducer } from './model'
-import { streamDemo, streamScan } from './api'
+import { RateLimitInfo, streamDemo, streamScan } from './api'
+import { DEFAULT_FORM, ScanFormValues, formFromUrl, formToUrl } from './form'
 import { ScanEvent, Selection } from './types'
 
 const errorMessage = (error: unknown) => {
@@ -17,11 +18,16 @@ export function App() {
   const [hover, setHover] = useState<string | null>(null)
   const [mode, setMode] = useState<'orbit' | 'fly'>('orbit')
   const [resetSignal, setResetSignal] = useState(0)
+  const [rateLimit, setRateLimit] = useState<RateLimitInfo | null>(null)
+  const [initial] = useState<ScanFormValues>(
+    () => formFromUrl(window.location.search) || DEFAULT_FORM,
+  )
 
   const bufferRef = useRef<ScanEvent[]>([])
   const timerRef = useRef<number | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const runIdRef = useRef(0)
+  const bootedRef = useRef(false)
 
   const flush = useCallback(() => {
     timerRef.current = null
@@ -74,6 +80,10 @@ export function App() {
 
   const runScan = useCallback(
     async (values: ScanFormValues) => {
+      // Keep the address bar in sync so the result can be shared as a link.
+      try {
+        window.history.replaceState(null, '', formToUrl(values))
+      } catch {}
       const { id, controller } = begin(values.target, false)
       try {
         await streamScan(
@@ -82,6 +92,7 @@ export function App() {
             if (runIdRef.current === id) enqueue(event)
           },
           controller.signal,
+          setRateLimit,
         )
       } catch (error) {
         if ((error as Error)?.name !== 'AbortError' && runIdRef.current === id) {
@@ -108,6 +119,14 @@ export function App() {
       if (runIdRef.current === id) flushNow()
     }
   }, [begin, enqueue, flushNow])
+
+  // A shared link (?target=...) starts scanning on its own.
+  useEffect(() => {
+    if (bootedRef.current) return
+    bootedRef.current = true
+    if (!formFromUrl(window.location.search)) return
+    runScan(initial)
+  }, [initial, runScan])
 
   const stop = useCallback(() => {
     runIdRef.current++
@@ -158,6 +177,8 @@ export function App() {
       />
       <Hud
         model={model}
+        initial={initial}
+        rateLimit={rateLimit}
         selection={selection}
         hover={hover}
         mode={mode}

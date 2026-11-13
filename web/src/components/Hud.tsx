@@ -1,16 +1,13 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { ScanState, Selection } from '../types'
-import { getSelectionDetails, portCounts } from '../model'
-
-export interface ScanFormValues {
-  target: string
-  ports: string
-  traceroute: boolean
-  geo: boolean
-}
+import { getSelectionDetails, objectSummary, portCounts } from '../model'
+import { RateLimitInfo } from '../api'
+import { DEFAULT_FORM, PORT_PRESETS, ScanFormValues, formToUrl } from '../form'
 
 interface HudProps {
   model: ScanState
+  initial: ScanFormValues
+  rateLimit: RateLimitInfo | null
   selection: Selection
   hover: string | null
   mode: 'orbit' | 'fly'
@@ -46,6 +43,8 @@ const STATUS: Record<ScanState['phase'], string> = {
 
 export function Hud({
   model,
+  initial,
+  rateLimit,
   selection,
   hover,
   mode,
@@ -57,25 +56,38 @@ export function Hud({
   onToggleMode,
   onResetCamera,
 }: HudProps) {
-  const [target, setTarget] = useState('github.com')
-  const [ports, setPorts] = useState('22,80,443,8080,8443')
-  const [traceroute, setTraceroute] = useState(true)
-  const [geo, setGeo] = useState(true)
+  const [target, setTarget] = useState(initial.target || DEFAULT_FORM.target)
+  const [ports, setPorts] = useState(initial.ports)
+  const [traceroute, setTraceroute] = useState(initial.traceroute)
+  const [geo, setGeo] = useState(initial.geo)
   const [, tick] = useState(0)
   const [mobileTab, setMobileTab] = useState<'scan' | 'telemetry' | 'inspect'>('scan')
   const [sheetOpen, setSheetOpen] = useState(true)
+  const [shareState, setShareState] = useState<'idle' | 'copied' | 'error'>('idle')
 
   const logRef = useRef<HTMLDivElement>(null)
   const errorRef = useRef<HTMLDivElement>(null)
   const details = getSelectionDetails(model, selection)
+  const summary = objectSummary(model)
   const counts = portCounts(model)
   const primary = model.ips.find((ip) => ip.primary) || model.ips[0]
 
+  const resetIn = rateLimit?.resetAt
+    ? Math.max(0, Math.ceil((rateLimit.resetAt - Date.now()) / 1000))
+    : 0
+  const exhausted = Boolean(rateLimit && rateLimit.remaining <= 0)
+
   useEffect(() => {
-    if (model.phase !== 'scanning') return
-    const id = window.setInterval(() => tick((value) => value + 1), 300)
+    const scanningNow = model.phase === 'scanning'
+    if (!scanningNow && !exhausted) return
+    const id = window.setInterval(() => {
+      if (!scanningNow && rateLimit?.resetAt && Date.now() > rateLimit.resetAt + 1000) {
+        window.clearInterval(id)
+      }
+      tick((value) => value + 1)
+    }, 500)
     return () => window.clearInterval(id)
-  }, [model.phase])
+  }, [model.phase, exhausted, rateLimit])
 
   useEffect(() => {
     const el = logRef.current
@@ -104,6 +116,12 @@ export function Hud({
     }
   }, [model.error])
 
+  useEffect(() => {
+    if (shareState === 'idle') return
+    const id = window.setTimeout(() => setShareState('idle'), 2200)
+    return () => window.clearTimeout(id)
+  }, [shareState])
+
   const pickTab = (tab: 'scan' | 'telemetry' | 'inspect') => {
     if (mobileTab === tab && sheetOpen) {
       setSheetOpen(false)
@@ -116,6 +134,23 @@ export function Hud({
   const startDemo = () => {
     onDemo()
     setSheetOpen(false)
+  }
+
+  const share = async () => {
+    const value = target.trim()
+    if (!value) return
+    const url = formToUrl({ target: value, ports, traceroute, geo })
+    try {
+      if (navigator.share && window.matchMedia('(max-width: 720px)').matches) {
+        await navigator.share({ title: 'NETWORK//MAP', url })
+        return
+      }
+      await navigator.clipboard.writeText(url)
+      setShareState('copied')
+    } catch (error) {
+      if ((error as Error)?.name === 'AbortError') return
+      setShareState('error')
+    }
   }
 
   const submit = (event: FormEvent) => {
@@ -171,7 +206,18 @@ export function Hud({
         <form className="panel scanner" onSubmit={submit}>
           <div className="panel-head">
             <span>01 / TARGET ACQUISITION</span>
-            <span className={`status-dot ${model.phase}`} />
+            <div className="panel-head-actions">
+              <button
+                type="button"
+                className={`link-btn ${shareState}`}
+                onClick={share}
+                disabled={!target.trim()}
+                title="Скопировать ссылку на этот скан"
+              >
+                {shareState === 'copied' ? '✓ СКОПИРОВАНО' : shareState === 'error' ? '✕ НЕТ ДОСТУПА' : '⧉ ССЫЛКА'}
+              </button>
+              <span className={`status-dot ${model.phase}`} />
+            </div>
           </div>
 
           <label className="field-label" htmlFor="target">
@@ -199,6 +245,21 @@ export function Hud({
             spellCheck={false}
             autoComplete="off"
           />
+
+          <div className="preset-row">
+            <span className="quick-label">НАБОР:</span>
+            {PORT_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className={`chip ${ports === preset.value ? 'active' : ''}`}
+                onClick={() => setPorts(preset.value)}
+                title={preset.hint}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
 
           <div className="options-row">
             <label className="toggle">
@@ -238,6 +299,20 @@ export function Hud({
             <div className="progress">
               <span />
             </div>
+          )}
+
+          {rateLimit && (
+            <p className={`limit-line ${exhausted ? 'empty' : ''}`}>
+              <span>ЛИМИТ</span>
+              <b>
+                {rateLimit.remaining}/{rateLimit.limit}
+              </b>
+              {exhausted ? (
+                <em>{resetIn > 0 ? `сброс через ${resetIn} с` : 'лимит свободен'}</em>
+              ) : (
+                <em>сканов в минуту</em>
+              )}
+            </p>
           )}
 
           <div className="quick-row">
@@ -305,6 +380,66 @@ export function Hud({
       </aside>
 
       <aside className="right-col">
+        {summary && model.phase !== 'idle' && (
+          <section className="panel summary">
+            <div className="panel-head">
+              <span>04 / OBJECT SUMMARY</span>
+              <span
+                className={`hygiene-score ${
+                  summary.hygieneOk === summary.hygiene.length
+                    ? 'ok'
+                    : summary.hygieneOk >= 3
+                      ? 'warn'
+                      : 'bad'
+                }`}
+                title="Присутствие заголовков безопасности HTTP"
+              >
+                {summary.hygieneOk}/{summary.hygiene.length}
+              </span>
+            </div>
+
+            <div className="summary-grid">
+              {summary.providers.map((item) => (
+                <div className="summary-item" key={item.label}>
+                  <span className="k">{item.label}</span>
+                  <span className="v" title={item.value}>{item.value}</span>
+                </div>
+              ))}
+            </div>
+
+            {summary.cert && (
+              <div
+                className={`cert-row ${
+                  summary.cert.expired ? 'bad' : summary.cert.expiringSoon ? 'warn' : 'ok'
+                }`}
+                title={summary.cert.validTo ? `Действителен до ${summary.cert.validTo}` : undefined}
+              >
+                <span className="cert-tag">TLS</span>
+                <span className="cert-main">{summary.cert.issuer}</span>
+                <span className="cert-days">
+                  {summary.cert.days == null
+                    ? summary.cert.protocol
+                    : summary.cert.expired
+                      ? 'истёк'
+                      : `${summary.cert.days} дн.`}
+                </span>
+              </div>
+            )}
+
+            <div className="hygiene-row">
+              {summary.hygiene.map((flag) => (
+                <span
+                  key={flag.key}
+                  className={`hygiene ${flag.ok ? 'ok' : 'bad'}`}
+                  title={`${flag.hint}: ${flag.ok ? 'есть' : 'нет'}`}
+                >
+                  <i /> {flag.label}
+                </span>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section className={`panel telemetry phase-${model.phase}`}>
           <div className="panel-head">
             <span>02 / TELEMETRY</span>

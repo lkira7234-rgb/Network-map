@@ -123,8 +123,24 @@ input {
   grid-column: 3;
   grid-row: 1;
   align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   pointer-events: auto;
   max-height: calc(100vh - 90px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 246, 255, 0.25) transparent;
+}
+
+.right-col::-webkit-scrollbar {
+  width: 4px;
+}
+
+.right-col::-webkit-scrollbar-thumb {
+  background: rgba(56, 246, 255, 0.28);
 }
 
 .bottom-bar {
@@ -317,6 +333,46 @@ input {
   border-radius: 50%;
   background: var(--cyan);
   box-shadow: 0 0 9px var(--cyan);
+}
+
+.panel-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.link-btn {
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  color: #6fd0e0;
+  background: rgba(56, 246, 255, 0.05);
+  border: 1px solid rgba(56, 246, 255, 0.2);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
+}
+
+.link-btn:hover:not(:disabled) {
+  color: #eaffff;
+  border-color: rgba(56, 246, 255, 0.6);
+  background: rgba(56, 246, 255, 0.12);
+}
+
+.link-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.link-btn.copied {
+  color: var(--green);
+  border-color: rgba(73, 255, 158, 0.45);
+}
+
+.link-btn.error {
+  color: var(--danger);
+  border-color: rgba(255, 77, 109, 0.45);
 }
 
 .status-dot.idle { opacity: 0.55; }
@@ -529,6 +585,14 @@ input {
   margin-top: 12px;
 }
 
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+}
+
 .quick-label {
   font-family: var(--font-mono);
   font-size: 8px;
@@ -553,6 +617,43 @@ input {
   background: rgba(56, 246, 255, 0.1);
 }
 
+.chip.active {
+  color: #03151b;
+  background: linear-gradient(115deg, #47faff, #26c7dd);
+  border-color: #71fbff;
+  box-shadow: 0 0 12px rgba(56, 246, 255, 0.25);
+}
+
+.limit-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 9px 0 0;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  color: var(--muted-2);
+}
+
+.limit-line b {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--cyan);
+}
+
+.limit-line em {
+  font-style: normal;
+  letter-spacing: 0.06em;
+  color: var(--muted-2);
+}
+
+.limit-line.empty b,
+.limit-line.empty em {
+  color: var(--amber);
+}
+
 .scanner-note {
   margin: 11px 0 0;
   padding-top: 9px;
@@ -563,6 +664,130 @@ input {
   letter-spacing: 0.01em;
   color: #4f7786;
 }
+
+/* ------------------------------------------------------------------ */
+/*  object summary                                                     */
+/* ------------------------------------------------------------------ */
+
+.summary {
+  padding-bottom: 13px;
+}
+
+.hygiene-score {
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--green);
+  border: 1px solid currentColor;
+}
+
+.hygiene-score.warn { color: var(--amber); }
+.hygiene-score.bad { color: var(--danger); }
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  margin-bottom: 7px;
+}
+
+.summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid rgba(56, 246, 255, 0.1);
+  background: rgba(2, 15, 23, 0.5);
+}
+
+.summary-item .k {
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.16em;
+  color: var(--muted-2);
+}
+
+.summary-item .v {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 10.5px;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  color: #d8f8ff;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.cert-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 7px;
+  padding: 6px 7px;
+  border-left: 2px solid currentColor;
+  background: rgba(2, 15, 23, 0.5);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--green);
+}
+
+.cert-row.warn { color: var(--amber); }
+.cert-row.bad { color: var(--danger); }
+
+.cert-tag {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  font-size: 7px;
+  letter-spacing: 0.14em;
+  border: 1px solid currentColor;
+}
+
+.cert-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #d5f6ff;
+}
+
+.cert-days {
+  flex: 0 0 auto;
+}
+
+.hygiene-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.hygiene {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 5px;
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  letter-spacing: 0.1em;
+  color: #5c8b99;
+  border: 1px solid rgba(56, 246, 255, 0.12);
+  background: rgba(0, 14, 21, 0.45);
+}
+
+.hygiene i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.hygiene.ok { color: var(--green); border-color: rgba(73, 255, 158, 0.3); }
+.hygiene.bad { color: #ff6a80; border-color: rgba(255, 77, 109, 0.22); }
 
 /* ------------------------------------------------------------------ */
 /*  telemetry                                                          */
@@ -1503,6 +1728,7 @@ input {
   .left-col { gap: 8px; }
   .left-col .brand { display: none; }
   .right-col { max-height: min(62vh, 620px); max-height: min(62dvh, 620px); }
+  .right-col .summary { margin-bottom: 8px; }
 
   .panel { padding: 12px 13px 14px; }
   .text-input { font-size: 16px; padding: 11px 12px; }
@@ -1512,6 +1738,16 @@ input {
   .btn { padding: 12px 13px; }
   .quick-row { margin-top: 10px; }
   .chip { padding: 6px 8px; font-size: 9px; }
+  .preset-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin-top: 7px;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .preset-row::-webkit-scrollbar { display: none; }
+  .preset-row .chip { flex: 0 0 auto; }
+  .link-btn { padding: 4px 7px; font-size: 8px; }
 
   .telemetry { max-height: none; }
   .log {

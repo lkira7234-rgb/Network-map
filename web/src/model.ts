@@ -4,10 +4,13 @@ import {
   HopInfo,
   IpEntry,
   LogEntry,
+  ObjectSummary,
   ScanEvent,
   ScanState,
   Selection,
   SelectionDetails,
+  SummaryCert,
+  SummaryFlag,
   emptyDns,
   initialState,
 } from './types'
@@ -163,17 +166,20 @@ export function scanReducer(state: ScanState, action: ScanAction): ScanState {
     }
 
     case 'http': {
-      const ips = patchIp(state, event.ip, {
-        http: {
-          port: event.port,
-          status: event.status,
-          server: event.server,
-          poweredBy: event.poweredBy,
-          contentType: event.contentType,
-          title: event.title,
-          headers: event.headers,
-        },
-      })
+      const entry = {
+        port: event.port,
+        status: event.status,
+        server: event.server,
+        poweredBy: event.poweredBy,
+        contentType: event.contentType,
+        title: event.title,
+        headers: event.headers,
+      }
+      const previous = state.ips.find((ip) => ip.ip === event.ip)
+      const httpAll = [...(previous?.httpAll || []).filter((item) => item.port !== event.port), entry].sort(
+        (a, b) => a.port - b.port,
+      )
+      const ips = patchIp(state, event.ip, { http: entry, httpAll })
       return { ...state, ips }
     }
 
@@ -254,6 +260,156 @@ export const portCounts = (state: ScanState) => {
 const fmtGeo = (geo?: GeoInfo | null): string => {
   if (!geo) return '—'
   return [geo.city, geo.country].filter(Boolean).join(', ') || '—'
+}
+
+/* ------------------------------------------------------------------ */
+/*  object summary                                                     */
+/* ------------------------------------------------------------------ */
+
+type ProviderTable = [RegExp, string][]
+
+const DNS_PROVIDERS: ProviderTable = [
+  [/cloudflare/, 'Cloudflare'],
+  [/awsdns/, 'AWS Route 53'],
+  [/domaincontrol|godaddy/, 'GoDaddy'],
+  [/googledomains|ns-cloud|google/, 'Google Cloud DNS'],
+  [/azure-dns/, 'Azure DNS'],
+  [/digitalocean/, 'DigitalOcean'],
+  [/nsone/, 'NS1'],
+  [/yandex/, 'Yandex DNS'],
+  [/reg\.ru|regru/, 'REG.RU'],
+  [/timeweb/, 'Timeweb'],
+  [/beget/, 'Beget'],
+  [/hetzner/, 'Hetzner'],
+  [/dnsimple/, 'DNSimple'],
+  [/registrar-servers|namecheap/, 'Namecheap'],
+  [/cloudns/, 'ClouDNS'],
+  [/dnspod/, 'DNSPod'],
+  [/hurricane|he\.net/, 'Hurricane Electric'],
+]
+
+const MAIL_PROVIDERS: ProviderTable = [
+  [/google|googlemail/, 'Google Workspace'],
+  [/protection\.outlook|outlook|microsoft/, 'Microsoft 365'],
+  [/yandex/, 'Yandex Mail'],
+  [/mail\.ru|mailru/, 'Mail.ru'],
+  [/zoho/, 'Zoho Mail'],
+  [/icloud|apple/, 'iCloud Mail'],
+  [/proton/, 'Proton Mail'],
+  [/mimecast/, 'Mimecast'],
+  [/proofpoint|pphosted/, 'Proofpoint'],
+  [/barracuda/, 'Barracuda'],
+  [/mailgun/, 'Mailgun'],
+  [/sendgrid/, 'SendGrid'],
+  [/amazonses|amazonaws/, 'Amazon SES'],
+]
+
+const EDGE_PROVIDERS: ProviderTable = [
+  [/cf-ray|cloudflare/, 'Cloudflare'],
+  [/x-amz-cf-id|cloudfront/, 'AWS CloudFront'],
+  [/akamai/, 'Akamai'],
+  [/x-fastly|x-served-by/, 'Fastly'],
+  [/x-vercel|server=vercel/, 'Vercel'],
+  [/x-nf-request-id|netlify/, 'Netlify'],
+  [/x-github-request-id/, 'GitHub Pages'],
+  [/sucuri/, 'Sucuri'],
+  [/x-proxy-cache|varnish/, 'Varnish'],
+  [/bunnycdn|b-cdn/, 'Bunny CDN'],
+  [/ddos-guard/, 'DDoS-Guard'],
+  [/qrator/, 'Qrator'],
+]
+
+function matchProvider(haystack: string, table: ProviderTable): string | null {
+  for (const [pattern, name] of table) {
+    if (pattern.test(haystack)) return name
+  }
+  return null
+}
+
+/**
+ * Turns raw DNS/HTTP/TLS events into a compact "what is this host" summary:
+ * DNS and mail providers, edge/CDN, network owner, certificate health and
+ * a handful of HTTP security headers.
+ */
+export function objectSummary(state: ScanState): ObjectSummary | null {
+  const hasData =
+    state.dns.ns.length > 0 ||
+    state.dns.mx.length > 0 ||
+    state.ips.some((entry) => entry.http || entry.tls)
+  if (!hasData) return null
+
+  const ns = state.dns.ns.join(' ').toLowerCase()
+  const dnsName = ns ? matchProvider(ns, DNS_PROVIDERS) || state.dns.ns[0] || '—' : '—'
+
+  const mx = state.dns.mx.map((entry) => entry.exchange).join(' ').toLowerCase()
+  const mailName = mx
+    ? matchProvider(mx, MAIL_PROVIDERS) || state.dns.mx[0]?.exchange || '—'
+    : '—'
+
+  const httpEntries = state.ips.flatMap((entry) =>
+    entry.httpAll?.length ? entry.httpAll : entry.http ? [entry.http] : [],
+  )
+  const preferred =
+    httpEntries.find((entry) => entry.port === 443) ||
+    httpEntries.slice().sort((a, b) => a.port - b.port)[0]
+  const headers = preferred?.headers || {}
+  const server = preferred?.server || httpEntries.find((entry) => entry?.server)?.server || ''
+  const haystack = [
+    ...httpEntries.flatMap((entry) => Object.entries(entry?.headers || {}).map(([k, v]) => `${k}=${v}`)),
+    ...httpEntries.map((entry) => entry?.server || ''),
+    ...httpEntries.map((entry) => entry?.poweredBy || ''),
+  ]
+    .join(' ')
+    .toLowerCase()
+  const edge = haystack ? matchProvider(haystack, EDGE_PROVIDERS) : null
+  const edgeName = edge || server || '—'
+
+  const primary = primaryIp(state)
+  const geo = primary?.geo
+  const asnName = [geo?.asn, geo?.isp || geo?.org].filter(Boolean).join(' · ') || '—'
+
+  const tlsInfo = state.ips.find((entry) => entry.tls)?.tls
+  let cert: SummaryCert | null = null
+  if (tlsInfo) {
+    const parsed = tlsInfo.validTo ? Date.parse(tlsInfo.validTo) : NaN
+    const days = Number.isFinite(parsed) ? Math.ceil((parsed - Date.now()) / 86_400_000) : null
+    cert = {
+      issuer: tlsInfo.issuer || '—',
+      subject: tlsInfo.subject || '—',
+      protocol: tlsInfo.protocol || '—',
+      days,
+      validTo: tlsInfo.validTo || null,
+      expired: days != null && days <= 0,
+      expiringSoon: days != null && days > 0 && days <= 14,
+      altNames: tlsInfo.altNames?.length || 0,
+    }
+  }
+
+  const csp = String(headers['content-security-policy'] || '')
+  const hygiene: SummaryFlag[] = [
+    { key: 'hsts', label: 'HSTS', hint: 'strict-transport-security', ok: Boolean(headers['strict-transport-security']) },
+    { key: 'csp', label: 'CSP', hint: 'content-security-policy', ok: Boolean(csp) },
+    {
+      key: 'xfo',
+      label: 'XFO',
+      hint: 'x-frame-options или CSP frame-ancestors',
+      ok: Boolean(headers['x-frame-options']) || /frame-ancestors/i.test(csp),
+    },
+    { key: 'xcto', label: 'XCTO', hint: 'x-content-type-options', ok: Boolean(headers['x-content-type-options']) },
+    { key: 'ref', label: 'REF', hint: 'referrer-policy', ok: Boolean(headers['referrer-policy']) },
+  ]
+
+  return {
+    providers: [
+      { label: 'DNS', value: dnsName },
+      { label: 'ПОЧТА', value: mailName },
+      { label: 'CDN / WAF', value: edgeName },
+      { label: 'ASN', value: asnName },
+    ],
+    cert,
+    hygiene,
+    hygieneOk: hygiene.filter((flag) => flag.ok).length,
+  }
 }
 
 export function getSelectionDetails(state: ScanState, selection: Selection): SelectionDetails | null {
