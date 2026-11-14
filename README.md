@@ -184,6 +184,8 @@ server/
 - страница открыта по HTTPS, значит браузер заблокирует `http://`-запросы (mixed content): для пробы выбирай TLS-порт (443, 8443, 9443);
 - это не ICMP `ping`: браузер умеет только HTTP(S), зато честно с твоего адреса.
 
+![Network Map — direct probe](docs/probe.png)
+
 ### Внешние источники
 
 - **GEO**: [ipwho.is](https://ipwho.is) с резервным [ip-api.com](http://ip-api.com).

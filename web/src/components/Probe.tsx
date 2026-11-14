@@ -218,7 +218,14 @@ export function Probe({ model }: { model: ScanState }) {
           <select
             className="probe-input"
             value={port}
-            onChange={(event) => setPort(Number(event.target.value))}
+            onChange={(event) => {
+              // Stats and the log are tied to one port; start a clean session.
+              setPort(Number(event.target.value))
+              setResults([])
+              setError(null)
+              failures.current = 0
+              sent.current = 0
+            }}
             disabled={running}
           >
             {openPorts.length === 0 && <option value={port}>{port}</option>}
@@ -331,7 +338,7 @@ export function Probe({ model }: { model: ScanState }) {
 
       {fingerprint && (
         <div className="probe-fingerprint">
-          <span className="k">ИЗ СКАНА</span>
+          <span className="k">ИЗ СКАНА · :{port}</span>
           {fingerprint.http ? (
             <>
               <span className="v">
