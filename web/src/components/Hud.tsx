@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { ScanState, Selection } from '../types'
+import { Probe } from './Probe'
 import { getSelectionDetails, objectSummary, portCounts } from '../model'
 import { RateLimitInfo } from '../api'
 import { DEFAULT_FORM, PORT_PRESETS, ScanFormValues, formToUrl } from '../form'
@@ -328,6 +329,8 @@ export function Hud({
             Пустой список портов = топ-27. Сканируй только те системы, которые тебе разрешено проверять.
           </p>
         </form>
+
+        <Probe model={model} />
 
         {model.error && (
           <div className="panel error-panel" ref={errorRef}>
