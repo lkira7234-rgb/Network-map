@@ -375,6 +375,68 @@ input {
   border-color: rgba(255, 77, 109, 0.45);
 }
 
+/* ------------------------------------------------------------------ */
+/*  report menu                                                        */
+/* ------------------------------------------------------------------ */
+
+.report-menu {
+  position: relative;
+}
+
+.report-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 206px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: rgba(3, 12, 20, 0.98);
+  border: 1px solid rgba(56, 246, 255, 0.32);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.65), inset 0 0 26px rgba(56, 246, 255, 0.05);
+  clip-path: polygon(8px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+  animation: panel-in 0.16s ease-out;
+}
+
+.report-list button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #cdeff7;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.report-list button:hover,
+.report-list button:focus-visible {
+  background: rgba(56, 246, 255, 0.1);
+  border-color: rgba(56, 246, 255, 0.25);
+  outline: none;
+}
+
+.report-list b {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.report-list em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  line-height: 1.4;
+  color: #5b8a99;
+}
+
 .status-dot.idle { opacity: 0.55; }
 .status-dot.scanning { background: var(--amber); box-shadow: 0 0 10px var(--amber); animation: dot-pulse 1s ease-in-out infinite; }
 .status-dot.done { background: var(--green); box-shadow: 0 0 10px var(--green); }
@@ -622,6 +684,63 @@ input {
   background: linear-gradient(115deg, #47faff, #26c7dd);
   border-color: #71fbff;
   box-shadow: 0 0 12px rgba(56, 246, 255, 0.25);
+}
+
+/* ------------------------------------------------------------------ */
+/*  nmap / masscan import                                              */
+/* ------------------------------------------------------------------ */
+
+.import-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.import-chip {
+  color: var(--magenta);
+  border-color: rgba(255, 47, 214, 0.28);
+  background: rgba(255, 47, 214, 0.05);
+}
+
+.import-chip:hover {
+  color: #ffe9fb;
+  border-color: rgba(255, 47, 214, 0.7);
+  background: rgba(255, 47, 214, 0.12);
+}
+
+.import-file {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.import-note {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  line-height: 1.45;
+  letter-spacing: 0.06em;
+  color: var(--muted-2);
+  overflow-wrap: anywhere;
+}
+
+.import-note.ok {
+  color: var(--cyan);
+}
+
+.import-note.error {
+  color: var(--danger);
+}
+
+.import-note.busy {
+  color: var(--amber);
 }
 
 .limit-line {
@@ -2085,6 +2204,9 @@ select.probe-input {
   }
   .preset-row::-webkit-scrollbar { display: none; }
   .preset-row .chip { flex: 0 0 auto; }
+  .import-row { margin-top: 8px; }
+  .import-chip { flex: 0 0 auto; padding: 7px 9px; font-size: 9px; }
+  .import-note { font-size: 8.5px; }
   .link-btn { padding: 4px 7px; font-size: 8px; }
 
   .probe-input { font-size: 16px; padding: 9px 8px; }

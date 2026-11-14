@@ -120,6 +120,23 @@ export function App() {
     }
   }, [begin, enqueue, flushNow])
 
+  const importScan = useCallback(
+    (events: ScanEvent[], target: string) => {
+      runIdRef.current++
+      abortRef.current?.abort()
+      abortRef.current = null
+      bufferRef.current = []
+      if (timerRef.current != null) {
+        window.clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+      setSelection(null)
+      setHover(null)
+      dispatch({ type: 'import', target, events })
+    },
+    [],
+  )
+
   // A shared link (?target=...) starts scanning on its own.
   useEffect(() => {
     if (bootedRef.current) return
@@ -185,6 +202,7 @@ export function App() {
         scanning={model.phase === 'scanning'}
         onSelect={setSelection}
         onScan={runScan}
+        onImport={importScan}
         onDemo={runDemo}
         onStop={stop}
         onToggleMode={toggleMode}

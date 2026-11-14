@@ -1,9 +1,11 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
-import { ScanState, Selection } from '../types'
+import { ScanEvent, ScanState, Selection } from '../types'
 import { Probe } from './Probe'
 import { getSelectionDetails, objectSummary, portCounts } from '../model'
 import { RateLimitInfo } from '../api'
 import { DEFAULT_FORM, PORT_PRESETS, ScanFormValues, formToUrl } from '../form'
+import { buildHtmlReport, buildReport, downloadText, printHtmlReport, reportFileName } from '../report'
+import { parseNmapXml, plural } from '../nmap'
 
 interface HudProps {
   model: ScanState
@@ -15,6 +17,7 @@ interface HudProps {
   scanning: boolean
   onSelect: (selection: Selection) => void
   onScan: (values: ScanFormValues) => void
+  onImport: (events: ScanEvent[], target: string) => void
   onDemo: () => void
   onStop: () => void
   onToggleMode: () => void
@@ -52,6 +55,7 @@ export function Hud({
   scanning,
   onSelect,
   onScan,
+  onImport,
   onDemo,
   onStop,
   onToggleMode,
@@ -65,13 +69,23 @@ export function Hud({
   const [mobileTab, setMobileTab] = useState<'scan' | 'telemetry' | 'inspect'>('scan')
   const [sheetOpen, setSheetOpen] = useState(true)
   const [shareState, setShareState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const [reportOpen, setReportOpen] = useState(false)
+  const [importState, setImportState] = useState<{
+    status: 'idle' | 'busy' | 'ok' | 'error'
+    message: string
+  }>({ status: 'idle', message: '' })
 
   const logRef = useRef<HTMLDivElement>(null)
   const errorRef = useRef<HTMLDivElement>(null)
+  const reportRef = useRef<HTMLDivElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
   const details = getSelectionDetails(model, selection)
   const summary = objectSummary(model)
   const counts = portCounts(model)
   const primary = model.ips.find((ip) => ip.primary) || model.ips[0]
+  const hasReport =
+    model.phase !== 'idle' &&
+    (model.ips.length > 0 || model.hops.length > 0 || model.dns.a.length > 0 || Boolean(model.rdap))
 
   const resetIn = rateLimit?.resetAt
     ? Math.max(0, Math.ceil((rateLimit.resetAt - Date.now()) / 1000))
@@ -123,6 +137,23 @@ export function Hud({
     return () => window.clearTimeout(id)
   }, [shareState])
 
+  // Close the download menu on outside click or Escape.
+  useEffect(() => {
+    if (!reportOpen) return
+    const onDown = (event: MouseEvent) => {
+      if (!reportRef.current?.contains(event.target as Node)) setReportOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setReportOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [reportOpen])
+
   const pickTab = (tab: 'scan' | 'telemetry' | 'inspect') => {
     if (mobileTab === tab && sheetOpen) {
       setSheetOpen(false)
@@ -158,8 +189,52 @@ export function Hud({
     event.preventDefault()
     const value = target.trim()
     if (!value) return
+    setImportState({ status: 'idle', message: '' })
     onScan({ target: value, ports, traceroute, geo })
     setSheetOpen(false)
+  }
+
+  const importFile = async (file: File | undefined) => {
+    if (!file) return
+    if (file.size > 32 * 1024 * 1024) {
+      setImportState({ status: 'error', message: 'Файл больше 32 МБ — отфильтруй отчёт.' })
+      return
+    }
+    setImportState({ status: 'busy', message: 'Читаю XML…' })
+    try {
+      const result = parseNmapXml(await file.text())
+      onImport(result.events, result.target)
+      setTarget(result.target)
+      setImportState({
+        status: 'ok',
+        message: `${result.scanner.toUpperCase()} · ${plural(result.hosts, ['хост', 'хоста', 'хостов'])} · ${plural(
+          result.ports,
+          ['порт', 'порта', 'портов'],
+        )}${result.udpSkipped ? ` · UDP ${result.udpSkipped} пропущено` : ''}`,
+      })
+      setSheetOpen(false)
+    } catch (error) {
+      setImportState({
+        status: 'error',
+        message: (error as Error)?.message || 'Не удалось прочитать файл.',
+      })
+    }
+  }
+
+  const saveReport = (kind: 'html' | 'json') => {
+    if (!hasReport) return
+    if (kind === 'json') {
+      downloadText(reportFileName(model, 'json'), 'application/json', JSON.stringify(buildReport(model), null, 2))
+    } else {
+      downloadText(reportFileName(model, 'html'), 'text/html', buildHtmlReport(model, summary))
+    }
+    setReportOpen(false)
+  }
+
+  const savePdf = () => {
+    if (!hasReport) return
+    printHtmlReport(buildHtmlReport(model, summary))
+    setReportOpen(false)
   }
 
   const elapsed = model.stats?.durationMs ?? (model.startedAt ? Date.now() - model.startedAt : 0)
@@ -208,6 +283,35 @@ export function Hud({
           <div className="panel-head">
             <span>01 / TARGET ACQUISITION</span>
             <div className="panel-head-actions">
+              <div className="report-menu" ref={reportRef}>
+                <button
+                  type="button"
+                  className="link-btn report-btn"
+                  onClick={() => setReportOpen((value) => !value)}
+                  disabled={!hasReport}
+                  aria-haspopup="menu"
+                  aria-expanded={reportOpen}
+                  title="Скачать отчёт: HTML, PDF или JSON"
+                >
+                  ⭳ ОТЧЁТ
+                </button>
+                {reportOpen && (
+                  <div className="report-list" role="menu" aria-label="Формат отчёта">
+                    <button type="button" role="menuitem" onClick={() => saveReport('html')}>
+                      <b>HTML</b>
+                      <em>готовая страница с картой данных</em>
+                    </button>
+                    <button type="button" role="menuitem" onClick={savePdf}>
+                      <b>PDF</b>
+                      <em>через диалог печати → «Сохранить как PDF»</em>
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => saveReport('json')}>
+                      <b>JSON</b>
+                      <em>все события и сырые заголовки</em>
+                    </button>
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 className={`link-btn ${shareState}`}
@@ -261,6 +365,37 @@ export function Hud({
               </button>
             ))}
           </div>
+
+          <div className="import-row">
+            <span className="quick-label">ИМПОРТ:</span>
+            <button
+              type="button"
+              className="chip import-chip"
+              onClick={() => fileRef.current?.click()}
+              title="Загрузить XML от Nmap или Masscan и показать его на карте"
+            >
+              ↥ NMAP / MASSCAN XML
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              className="import-file"
+              accept=".xml,text/xml,application/xml"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                // Reset so picking the same file twice still fires onChange.
+                event.target.value = ''
+                void importFile(file)
+              }}
+            />
+          </div>
+
+          {importState.status !== 'idle' && (
+            <p className={`import-note ${importState.status}`}>
+              {importState.status === 'busy' ? <span className="spinner" /> : null}
+              {importState.message}
+            </p>
+          )}
 
           <div className="options-row">
             <label className="toggle">

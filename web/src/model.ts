@@ -46,12 +46,21 @@ export type ScanAction =
   | { type: 'begin'; target: string; demo?: boolean }
   | { type: 'event'; event: ScanEvent }
   | { type: 'events'; events: ScanEvent[] }
+  | { type: 'import'; target: string; events: ScanEvent[] }
   | { type: 'fail'; message: string }
   | { type: 'cancel' }
   | { type: 'reset' }
 
 export function scanReducer(state: ScanState, action: ScanAction): ScanState {
   if (action.type === 'reset') return initialState
+
+  if (action.type === 'import') {
+    const seeded: ScanState = { ...initialState, target: action.target, host: action.target }
+    return action.events.reduce<ScanState>(
+      (acc, event) => scanReducer(acc, { type: 'event', event }),
+      seeded,
+    )
+  }
 
   if (action.type === 'events') {
     return action.events.reduce<ScanState>(
