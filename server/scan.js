@@ -1,5 +1,6 @@
 import dns from 'node:dns/promises'
 import net from 'node:net'
+import dgram from 'node:dgram'
 import tls from 'node:tls'
 import http from 'node:http'
 import https from 'node:https'
@@ -38,6 +39,18 @@ const SERVICES = {
 const TLS_PORTS = new Set([443, 465, 636, 993, 995, 8443, 9443, 2376, 6443])
 const HTTP_PORTS = new Set([80, 3000, 5000, 8000, 8080, 8081, 8888, 9000, 9090, 9200, 10000])
 const BANNER_PORTS = new Set([21, 22, 23, 25, 110, 143, 587])
+
+// Opt-in UDP probes. Only protocols with a safe, self-contained request that
+// any public service will answer; no payload is sent to arbitrary ports.
+const UDP_SERVICES = {
+  53: 'dns',
+  123: 'ntp',
+  161: 'snmp',
+  1900: 'ssdp',
+  5353: 'mdns',
+}
+const UDP_PORTS = Object.keys(UDP_SERVICES).map(Number).sort((a, b) => a - b)
+const UDP_TIMEOUT = 1500
 
 const DNS_TIMEOUT = 7000
 const GEO_TIMEOUT = 5000
@@ -199,6 +212,7 @@ function probePort(ip, port, timeoutMs) {
       socket.destroy()
       resolve({
         port,
+        protocol: 'tcp',
         state,
         rtt: Math.max(0, now() - started),
         service: serviceName(port),
@@ -231,6 +245,165 @@ function probePort(ip, port, timeoutMs) {
       socket.connect({ host: ip, port })
     } catch {
       finish('filtered', { error: 'CONNECT_FAILED' })
+    }
+  })
+}
+
+/* ------------------------------------------------------------------ */
+/*  UDP probes                                                         */
+/* ------------------------------------------------------------------ */
+
+const derTLV = (tag, body) => Buffer.concat([Buffer.from([tag, body.length]), body])
+
+/** Minimal DNS query packet (header + one question). */
+function dnsQuery(name, qtype = 1) {
+  const header = Buffer.alloc(12)
+  header.writeUInt16BE(0x4e4d, 0) // id "NM"
+  header.writeUInt16BE(0x0100, 2) // recursion desired
+  header.writeUInt16BE(1, 4) // QDCOUNT
+  const labels = name.split('.').filter(Boolean).map((label) => {
+    const bytes = Buffer.from(label, 'ascii')
+    return Buffer.concat([Buffer.from([bytes.length]), bytes])
+  })
+  const tail = Buffer.alloc(5)
+  tail.writeUInt16BE(qtype, 0)
+  tail.writeUInt16BE(1, 2) // IN
+  return Buffer.concat([header, ...labels, Buffer.from([0]), tail])
+}
+
+/** SNMPv1 GetRequest for sysDescr.0 with the community "public". */
+function snmpGet() {
+  const oid = Buffer.from([0x2b, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00])
+  const varbind = derTLV(0x30, Buffer.concat([derTLV(0x06, oid), Buffer.from([0x05, 0x00])]))
+  const varbinds = derTLV(0x30, varbind)
+  const pdu = derTLV(
+    0xa0,
+    Buffer.concat([
+      Buffer.from([0x02, 0x01, 0x01]), // request-id 1
+      Buffer.from([0x02, 0x01, 0x00]), // error-status 0
+      Buffer.from([0x02, 0x01, 0x00]), // error-index 0
+      varbinds,
+    ]),
+  )
+  return derTLV(
+    0x30,
+    Buffer.concat([
+      Buffer.from([0x02, 0x01, 0x00]), // SNMPv1
+      derTLV(0x04, Buffer.from('public')),
+      pdu,
+    ]),
+  )
+}
+
+function udpPayload(port) {
+  switch (port) {
+    case 53:
+      return dnsQuery('example.com', 1)
+    case 123: {
+      // NTP client request: LI=0, VN=3, Mode=3, then 47 zero bytes.
+      const packet = Buffer.alloc(48)
+      packet[0] = 0x1b
+      return packet
+    }
+    case 161:
+      return snmpGet()
+    case 5353:
+      // mDNS service enumeration query.
+      return dnsQuery('_services._dns-sd._udp.local', 12)
+    case 1900:
+      return Buffer.from(
+        'M-SEARCH * HTTP/1.1\r\n' +
+          'HOST: 239.255.255.250:1900\r\n' +
+          'MAN: "ssdp:discover"\r\n' +
+          'MX: 1\r\n' +
+          'ST: ssdp:all\r\n\r\n',
+        'ascii',
+      )
+    default:
+      return Buffer.alloc(0)
+  }
+}
+
+function describeUdp(port, message) {
+  if (!message?.length) return undefined
+  if (port === 53) {
+    const rcode = message.length >= 4 ? message[3] & 0x0f : null
+    return `DNS-ответ · ${message.length} B${rcode != null ? ` · rcode ${rcode}` : ''}`
+  }
+  if (port === 123) {
+    const version = (message[0] >> 3) & 7
+    return `NTP v${version} · stratum ${message[1] ?? '?'}`
+  }
+  if (port === 161) return `SNMP-ответ · ${message.length} B`
+  if (port === 5353) return `mDNS-ответ · ${message.length} B`
+  if (port === 1900) {
+    const text = message.toString('utf8')
+    const server = /^server:\s*(.+)$/im.exec(text)
+    return server ? `SSDP · ${server[1].trim().slice(0, 80)}` : 'SSDP-ответ'
+  }
+  return `UDP-ответ · ${message.length} B`
+}
+
+const normaliseAddress = (value) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/^::ffff:/, '')
+
+function probeUdp(ip, port, timeoutMs) {
+  return new Promise((resolve) => {
+    const started = now()
+    let done = false
+    let timer = null
+    let socket = null
+
+    const finish = (state, extra = {}) => {
+      if (done) return
+      done = true
+      if (timer) clearTimeout(timer)
+      try {
+        socket?.close()
+      } catch {}
+      resolve({
+        port,
+        protocol: 'udp',
+        state,
+        rtt: Math.max(0, now() - started),
+        service: UDP_SERVICES[port] || 'udp',
+        ...extra,
+      })
+    }
+
+    try {
+      socket = dgram.createSocket(net.isIPv6(ip) ? 'udp6' : 'udp4')
+    } catch {
+      finish('filtered', { error: 'SOCKET_FAILED' })
+      return
+    }
+
+    socket.on('message', (message, rinfo) => {
+      // Ignore stray packets that are not from the host we asked.
+      if (rinfo?.address && normaliseAddress(rinfo.address) !== normaliseAddress(ip)) return
+      const banner = describeUdp(port, message)
+      finish('open', banner ? { banner } : {})
+    })
+
+    // Linux only reports ICMP port-unreachable on connected sockets, so a
+    // timeout is honestly "open|filtered" rather than "closed".
+    socket.once('error', (err) => {
+      finish(err?.code === 'ECONNREFUSED' ? 'closed' : 'filtered', { error: err?.code || 'ERROR' })
+    })
+
+    timer = setTimeout(
+      () => finish('filtered', { error: 'TIMEOUT', banner: 'нет ответа · open|filtered' }),
+      timeoutMs,
+    )
+
+    try {
+      socket.send(udpPayload(port), port, ip, (err) => {
+        if (err) finish('filtered', { error: err?.code || 'SEND_FAILED' })
+      })
+    } catch {
+      finish('filtered', { error: 'SEND_FAILED' })
     }
   })
 }
@@ -671,6 +844,8 @@ export async function runScan(input, emit, signal) {
   const ports = parsePorts(input.ports)
   const useTraceroute = input.traceroute !== false
   const useGeo = input.geo !== false
+  const useUdp = input.udp === true
+  const udpPorts = useUdp ? UDP_PORTS.slice() : []
 
   const portTimeout = Math.min(10000, Math.max(200, Number(input.timeout) || 1400))
 
@@ -679,6 +854,7 @@ export async function runScan(input, emit, signal) {
     host: target.host,
     isIp: target.isIp,
     ports,
+    udpPorts,
     portTimeout,
     traceroute: useTraceroute,
     geo: useGeo,
@@ -688,7 +864,9 @@ export async function runScan(input, emit, signal) {
   emit({
     type: 'log',
     level: 'info',
-    message: `Инициализация сканирования ${target.host} · ${ports.length} порт(ов)`,
+    message: `Инициализация сканирования ${target.host} · ${ports.length} порт(ов)${
+      udpPorts.length ? ` + UDP ${udpPorts.join(',')}` : ''
+    }`,
   })
 
   /* ---------- DNS ---------- */
@@ -801,6 +979,8 @@ export async function runScan(input, emit, signal) {
     scanned: 0,
     ips: ips.length,
     hops: 0,
+    udp: 0,
+    udpOpen: 0,
   }
 
   const probeCache = new Set()
@@ -873,6 +1053,49 @@ export async function runScan(input, emit, signal) {
     await scanIp(entry)
   }
 
+  /* ---------- UDP (primary IP, opt-in) ---------- */
+  if (udpPorts.length && !isAborted(signal)) {
+    emit({
+      type: 'log',
+      level: 'info',
+      message: `UDP-пробы ${primary.ip}: ${udpPorts.join(', ')}`,
+    })
+    const results = await Promise.all(
+      udpPorts.map((port) => probeUdp(primary.ip, port, Math.max(portTimeout, UDP_TIMEOUT))),
+    )
+    for (const result of results) {
+      if (isAborted(signal)) break
+      stats.scanned++
+      stats.udp++
+      if (result.state === 'open') {
+        stats.open++
+        stats.udpOpen++
+      } else if (result.state === 'closed') {
+        stats.closed++
+      } else {
+        stats.filtered++
+      }
+
+      emit({ type: 'port', ip: primary.ip, ...result })
+
+      if (result.state === 'open') {
+        emit({
+          type: 'log',
+          level: 'open',
+          message: `UDP ${primary.ip}:${result.port} OPEN · ${result.service}${
+            result.banner ? ` · ${result.banner}` : ''
+          }`,
+        })
+      } else if (result.state === 'filtered') {
+        emit({
+          type: 'log',
+          level: 'info',
+          message: `UDP ${primary.ip}:${result.port} open|filtered · нет ответа за ${result.rtt} мс`,
+        })
+      }
+    }
+  }
+
   const traceResult = useTraceroute
     ? await tracerouteTask
     : { hops: [], ok: false }
@@ -901,6 +1124,7 @@ export async function runScan(input, emit, signal) {
 function emptyStats(startedAt, portCount) {
   return {
     open: 0, closed: 0, filtered: 0, scanned: 0, ips: 0, hops: 0,
+    udp: 0, udpOpen: 0,
     durationMs: now() - startedAt, portCount,
   }
 }

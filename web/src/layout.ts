@@ -54,10 +54,12 @@ export function buildLayout(state: ScanState): Layout {
     )
 
     const ports: PortNode[] = Object.values(entry.ports).map((info) => {
-      const a = (info.port * 2.399963) % (Math.PI * 2)
+      // UDP orbits slightly outside TCP so :53 and udp/:53 never overlap.
+      const udp = info.protocol === 'udp'
+      const a = ((info.port * 2.399963) + (udp ? 1.75 : 0)) % (Math.PI * 2)
       const open = info.state === 'open'
       const filtered = info.state === 'filtered'
-      const rr = open ? 3.3 : filtered ? 4.4 : 4.0
+      const rr = (open ? 3.3 : filtered ? 4.4 : 4.0) + (udp ? 0.9 : 0)
       return {
         info,
         pos: v(

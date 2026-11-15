@@ -183,6 +183,7 @@ app.post('/api/scan', async (req, res) => {
           ports: req.body?.ports,
           traceroute: req.body?.traceroute !== false,
           geo: req.body?.geo !== false,
+          udp: req.body?.udp === true,
           timeout: req.body?.timeout,
         },
         emit,

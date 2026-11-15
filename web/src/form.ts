@@ -3,6 +3,7 @@ export interface ScanFormValues {
   ports: string
   traceroute: boolean
   geo: boolean
+  udp: boolean
 }
 
 export const DEFAULT_FORM: ScanFormValues = {
@@ -10,6 +11,7 @@ export const DEFAULT_FORM: ScanFormValues = {
   ports: '22,80,443,8080,8443',
   traceroute: true,
   geo: true,
+  udp: false,
 }
 
 export interface PortPreset {
@@ -42,6 +44,7 @@ export function formFromUrl(search: string): ScanFormValues | null {
     ports: params.get('ports') ?? DEFAULT_FORM.ports,
     traceroute: params.get('trace') !== '0',
     geo: params.get('geo') !== '0',
+    udp: params.get('udp') === '1',
   }
 }
 
@@ -54,5 +57,6 @@ export function formToUrl(values: ScanFormValues, base?: string): string {
   if (values.ports.trim()) params.set('ports', values.ports.trim())
   if (!values.traceroute) params.set('trace', '0')
   if (!values.geo) params.set('geo', '0')
+  if (values.udp) params.set('udp', '1')
   return url.toString()
 }

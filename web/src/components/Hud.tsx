@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { ScanEvent, ScanState, Selection } from '../types'
 import { Probe } from './Probe'
 import { getSelectionDetails, objectSummary, portCounts } from '../model'
@@ -6,6 +6,7 @@ import { RateLimitInfo } from '../api'
 import { DEFAULT_FORM, PORT_PRESETS, ScanFormValues, formToUrl } from '../form'
 import { buildHtmlReport, buildReport, downloadText, printHtmlReport, reportFileName } from '../report'
 import { parseNmapXml, plural } from '../nmap'
+import { Severity, collectCves, severityColor, severityLabel } from '../cve'
 
 interface HudProps {
   model: ScanState
@@ -65,6 +66,7 @@ export function Hud({
   const [ports, setPorts] = useState(initial.ports)
   const [traceroute, setTraceroute] = useState(initial.traceroute)
   const [geo, setGeo] = useState(initial.geo)
+  const [udp, setUdp] = useState(initial.udp)
   const [, tick] = useState(0)
   const [mobileTab, setMobileTab] = useState<'scan' | 'telemetry' | 'inspect'>('scan')
   const [sheetOpen, setSheetOpen] = useState(true)
@@ -82,6 +84,7 @@ export function Hud({
   const details = getSelectionDetails(model, selection)
   const summary = objectSummary(model)
   const counts = portCounts(model)
+  const cves = useMemo(() => collectCves(model), [model.ips])
   const primary = model.ips.find((ip) => ip.primary) || model.ips[0]
   const hasReport =
     model.phase !== 'idle' &&
@@ -171,7 +174,7 @@ export function Hud({
   const share = async () => {
     const value = target.trim()
     if (!value) return
-    const url = formToUrl({ target: value, ports, traceroute, geo })
+    const url = formToUrl({ target: value, ports, traceroute, geo, udp })
     try {
       if (navigator.share && window.matchMedia('(max-width: 720px)').matches) {
         await navigator.share({ title: 'NETWORK//MAP', url })
@@ -190,7 +193,7 @@ export function Hud({
     const value = target.trim()
     if (!value) return
     setImportState({ status: 'idle', message: '' })
-    onScan({ target: value, ports, traceroute, geo })
+    onScan({ target: value, ports, traceroute, geo, udp })
     setSheetOpen(false)
   }
 
@@ -210,7 +213,7 @@ export function Hud({
         message: `${result.scanner.toUpperCase()} · ${plural(result.hosts, ['хост', 'хоста', 'хостов'])} · ${plural(
           result.ports,
           ['порт', 'порта', 'портов'],
-        )}${result.udpSkipped ? ` · UDP ${result.udpSkipped} пропущено` : ''}`,
+        )}${result.udpPorts ? ` · UDP ${result.udpPorts}` : ''}`,
       })
       setSheetOpen(false)
     } catch (error) {
@@ -408,6 +411,11 @@ export function Hud({
               <span className="toggle-box" />
               GEO / ASN
             </label>
+            <label className="toggle" title="UDP-пробы: DNS 53, NTP 123, SNMP 161, mDNS 5353, SSDP 1900">
+              <input type="checkbox" checked={udp} onChange={(event) => setUdp(event.target.checked)} />
+              <span className="toggle-box" />
+              UDP
+            </label>
           </div>
 
           <div className="actions-row">
@@ -513,6 +521,32 @@ export function Hud({
                 ))}
               </div>
             )}
+
+            {details.cves && details.cves.length > 0 && (
+              <div className="inspector-block cve-detail">
+                <h4 style={{ color: '#ff3b5c' }}>ПОТЕНЦИАЛЬНЫЕ УЯЗВИМОСТИ</h4>
+                {details.cves.map((cve) => (
+                  <div className="cve-detail-item" key={cve.id}>
+                    <div className="cve-detail-top">
+                      <span className={`cve-sev ${cve.severity}`}>
+                        {severityLabel[cve.severity as Severity] || cve.severity}
+                      </span>
+                      <b>{cve.id}</b>
+                      <em>
+                        {cve.product} {cve.version}
+                      </em>
+                    </div>
+                    <p>{cve.summary}</p>
+                    {cve.caveat && <p className="cve-caveat">{cve.caveat}</p>}
+                    {cve.fixed && <span className="cve-fixed">исправлено в {cve.fixed}</span>}
+                  </div>
+                ))}
+                <p className="cve-note">
+                  Версия взята из баннера и может быть неточной. Это эвристика, а не результат
+                  аудита.
+                </p>
+              </div>
+            )}
           </section>
         )}
       </aside>
@@ -575,6 +609,27 @@ export function Hud({
                 </span>
               ))}
             </div>
+
+            {cves.length > 0 && (
+              <div className="cve-block">
+                <div className="cve-head">
+                  <span>ПОТЕНЦИАЛЬНЫЕ CVE</span>
+                  <b>{cves.length}</b>
+                </div>
+                {cves.slice(0, 3).map((match) => (
+                  <div className="cve-item" key={`${match.id}-${match.ip}-${match.protocol}-${match.port}`}>
+                    <i style={{ background: severityColor[match.severity] }} />
+                    <span className="cve-id">{match.id}</span>
+                    <span className="cve-what">
+                      {match.product} {match.version} · :{match.port}
+                      {match.protocol === 'udp' ? '/u' : ''}
+                    </span>
+                  </div>
+                ))}
+                {cves.length > 3 && <span className="cve-more">+{cves.length - 3} ещё в инспекторе</span>}
+                <p className="cve-note">Эвристика по баннерам, не заключение аудита.</p>
+              </div>
+            )}
           </section>
         )}
 
@@ -596,7 +651,7 @@ export function Hud({
               <span className="stat-value">{model.ips.length}</span>
               <span className="stat-label">IP-УЗЛЫ</span>
             </div>
-            <div className="stat open">
+            <div className="stat open" title={counts.udp ? `TCP ${counts.open - counts.udpOpen} · UDP ${counts.udpOpen}` : undefined}>
               <span className="stat-value">{counts.open}</span>
               <span className="stat-label">ОТКРЫТО</span>
             </div>
@@ -722,6 +777,8 @@ export function Hud({
         <span><i className="dot target" />TARGET</span>
         <span><i className="dot ip" />IP</span>
         <span><i className="dot open" />OPEN</span>
+        {counts.udp > 0 && <span><i className="dot udp" />UDP</span>}
+        {cves.length > 0 && <span><i className="dot cve" />CVE</span>}
         <span><i className="dot closed" />CLOSED</span>
         <span><i className="dot ns" />DNS</span>
         <span><i className="dot hop" />HOP</span>

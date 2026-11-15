@@ -33,7 +33,7 @@ export function Probe({ model }: { model: ScanState }) {
     const found = new Set<number>()
     for (const ip of model.ips) {
       for (const port of Object.values(ip.ports)) {
-        if (port.state === 'open') found.add(port.port)
+        if (port.state === 'open' && port.protocol !== 'udp') found.add(port.port)
       }
     }
     return [...found].sort((a, b) => a - b)

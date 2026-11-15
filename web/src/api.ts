@@ -9,6 +9,7 @@ export interface ScanRequest {
   ports: string
   traceroute: boolean
   geo: boolean
+  udp: boolean
 }
 
 export interface RateLimitInfo {

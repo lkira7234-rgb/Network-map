@@ -15,6 +15,7 @@ import {
 } from '../layout'
 import { FlowingDots, Glow, Label, getGlowTexture, useHoverHandlers } from '../visuals'
 import { FlyControls } from './FlyControls'
+import { collectCves, cveKey, cvePortSet } from '../cve'
 
 interface SceneProps {
   model: ScanState
@@ -49,6 +50,9 @@ function SceneContent({ model, selection, onSelect, onHover, mode, onExitFly, re
   const layout = useMemo(() => buildLayout(model), [model.ips, model.hops, model.dns])
   const scanning = model.phase === 'scanning'
   const hasData = model.ips.length > 0
+  const cves = useMemo(() => collectCves(model), [model.ips])
+  const vulnerablePorts = useMemo(() => cvePortSet(cves), [cves])
+  const vulnerableIps = useMemo(() => new Set(cves.map((match) => match.ip)), [cves])
 
   return (
     <>
@@ -84,6 +88,8 @@ function SceneContent({ model, selection, onSelect, onHover, mode, onExitFly, re
             selection={selection}
             onSelect={onSelect}
             onHover={onHover}
+            vulnerablePorts={vulnerablePorts}
+            vulnerable={vulnerableIps.has(node.entry.ip)}
           />
         ))}
 
@@ -554,16 +560,26 @@ function IpSystem({
   selection,
   onSelect,
   onHover,
+  vulnerablePorts,
+  vulnerable,
 }: {
   node: IpLayout
   selection: Selection
   onSelect: (selection: Selection) => void
   onHover: (text: string | null) => void
+  vulnerablePorts: Set<string>
+  vulnerable: boolean
 }) {
   const body = useRef<THREE.Mesh>(null)
+  const vulnCount = node.open.filter((port) =>
+    vulnerablePorts.has(cveKey(node.entry.ip, port.info.port, port.info.protocol)),
+  ).length
   const handlers = useHoverHandlers(
     onHover,
-    `${node.entry.ip} · ${node.open.length} open · ${shortName(node.entry.ptr || node.entry.geo?.city || 'resolved host', 26)}`,
+    `${node.entry.ip} · ${node.open.length} open${vulnCount ? ` · ${vulnCount} CVE` : ''} · ${shortName(
+      node.entry.ptr || node.entry.geo?.city || 'resolved host',
+      26,
+    )}`,
   )
 
   const selected =
@@ -633,7 +649,7 @@ function IpSystem({
       <mesh ref={body} {...handlers} onClick={onClick} scale={selected ? 1.25 : 1}>
         <octahedronGeometry args={[0.72, 0]} />
         <meshBasicMaterial
-          color={node.entry.primary ? '#38f6ff' : '#91a9ff'}
+          color={vulnerable ? '#ff3b5c' : node.entry.primary ? '#38f6ff' : '#91a9ff'}
           wireframe
           transparent
           opacity={0.95}
@@ -643,14 +659,20 @@ function IpSystem({
       <mesh scale={0.34} onClick={onClick} {...handlers}>
         <octahedronGeometry args={[0.72, 0]} />
         <meshBasicMaterial
-          color={node.entry.primary ? '#38f6ff' : '#91a9ff'}
+          color={vulnerable ? '#ff3b5c' : node.entry.primary ? '#38f6ff' : '#91a9ff'}
           transparent
           opacity={0.55}
           toneMapped={false}
         />
       </mesh>
 
-      <Glow color="#38f6ff" scale={4.6} opacity={0.5} />
+      <Glow color={vulnerable ? '#ff3b5c' : '#38f6ff'} scale={4.6} opacity={vulnerable ? 0.7 : 0.5} />
+      {vulnerable && (
+        <mesh rotation={[Math.PI / 2, 0, 0]}>
+          <torusGeometry args={[1.55, 0.028, 8, 96]} />
+          <meshBasicMaterial color="#ff3b5c" transparent opacity={0.85} toneMapped={false} />
+        </mesh>
+      )}
       {selected && (
         <mesh rotation={[Math.PI / 2, 0, 0]}>
           <torusGeometry args={[2.1, 0.02, 8, 120]} />
@@ -686,15 +708,21 @@ function IpSystem({
 
       {node.open.map((port, index) => {
         const local = port.pos.clone().sub(node.pos)
+        const udp = port.info.protocol === 'udp'
+        const isVulnerable = vulnerablePorts.has(
+          cveKey(node.entry.ip, port.info.port, port.info.protocol),
+        )
+        const accent = isVulnerable ? '#ff3b5c' : udp ? '#ffb020' : '#49ff9e'
         const isSelected =
           selection?.kind === 'port' &&
           selection.ip === node.entry.ip &&
-          selection.port === port.info.port
+          selection.port === port.info.port &&
+          (selection.protocol ?? 'tcp') === port.info.protocol
         return (
-          <group key={port.info.port}>
+          <group key={`${port.info.protocol}:${port.info.port}`}>
             <Line
               points={[new THREE.Vector3(0, 0, 0), local]}
-              color="#49ff9e"
+              color={accent}
               lineWidth={0.6}
               transparent
               opacity={0.22}
@@ -704,11 +732,20 @@ function IpSystem({
               scale={isSelected ? 1.8 : 1}
               onClick={(event) => {
                 event.stopPropagation()
-                onSelect({ kind: 'port', ip: node.entry.ip, port: port.info.port })
+                onSelect({
+                  kind: 'port',
+                  ip: node.entry.ip,
+                  port: port.info.port,
+                  protocol: port.info.protocol,
+                })
               }}
               onPointerOver={(event) => {
                 event.stopPropagation()
-                onHover(`${node.entry.ip}:${port.info.port} OPEN · ${port.info.service || 'tcp'}`)
+                onHover(
+                  `${node.entry.ip}:${port.info.port} ${port.info.protocol.toUpperCase()} OPEN · ${
+                    port.info.service || 'service'
+                  }`,
+                )
                 document.body.style.cursor = 'pointer'
               }}
               onPointerOut={(event) => {
@@ -719,17 +756,17 @@ function IpSystem({
             >
               <octahedronGeometry args={[0.24, 0]} />
               <meshBasicMaterial
-                color={isSelected ? '#ffffff' : '#49ff9e'}
+                color={isSelected ? '#ffffff' : accent}
                 transparent
                 opacity={0.98}
                 toneMapped={false}
               />
             </mesh>
-            <Glow color="#49ff9e" scale={1.1} position={[local.x, local.y, local.z]} opacity={0.5} />
+            <Glow color={accent} scale={1.1} position={[local.x, local.y, local.z]} opacity={0.5} />
             {index < portLabelLimit && (
               <Label
-                text={`:${port.info.port}`}
-                color="#7dffc0"
+                text={`:${port.info.port}${udp ? '/u' : ''}`}
+                color={isVulnerable ? '#ff9baf' : udp ? '#ffd291' : '#7dffc0'}
                 position={[local.x, local.y + 0.4, local.z]}
                 scale={0.62}
                 opacity={0.9}

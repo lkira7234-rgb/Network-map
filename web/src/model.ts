@@ -13,7 +13,9 @@ import {
   SummaryFlag,
   emptyDns,
   initialState,
+  portKey,
 } from './types'
+import { matchCvesForPort } from './cve'
 
 let logId = 0
 
@@ -139,20 +141,24 @@ export function scanReducer(state: ScanState, action: ScanAction): ScanState {
     }
 
     case 'port': {
+      const protocol = event.protocol ?? 'tcp'
+      const key = portKey(event.port, protocol)
       const existing = state.ips.find((ip) => ip.ip === event.ip)
-      const prev = existing?.ports[event.port]
+      const prev = existing?.ports[key]
       const portInfo = {
         port: event.port,
+        protocol,
         state: event.state,
         rtt: event.rtt,
         service: event.service ?? null,
         banner: event.banner,
         error: event.error,
       }
-      const ports = { ...(existing?.ports || {}), [event.port]: { ...prev, ...portInfo } }
+      const ports = { ...(existing?.ports || {}), [key]: { ...prev, ...portInfo } }
       const ips = patchIp(state, event.ip, { ports })
       const next = { ...state, ips }
-      return event.state === 'open' && !prev ? log(next, 'open', `${event.ip}:${event.port} OPEN`) : next
+      const label = `${event.ip}:${event.port}${protocol === 'udp' ? '/udp' : ''}`
+      return event.state === 'open' && !prev ? log(next, 'open', `${label} OPEN`) : next
     }
 
     case 'tls': {
@@ -248,22 +254,29 @@ export const primaryIp = (state: ScanState): IpEntry | undefined =>
 export const openPorts = (ip: IpEntry) =>
   Object.values(ip.ports)
     .filter((p) => p.state === 'open')
-    .sort((a, b) => a.port - b.port)
+    .sort((a, b) => a.port - b.port || a.protocol.localeCompare(b.protocol))
 
-export const allPorts = (ip: IpEntry) => Object.values(ip.ports).sort((a, b) => a.port - b.port)
+export const allPorts = (ip: IpEntry) =>
+  Object.values(ip.ports).sort((a, b) => a.port - b.port || a.protocol.localeCompare(b.protocol))
 
 export const portCounts = (state: ScanState) => {
   let open = 0
   let closed = 0
   let filtered = 0
+  let udp = 0
+  let udpOpen = 0
   for (const ip of state.ips) {
     for (const port of Object.values(ip.ports)) {
       if (port.state === 'open') open++
       else if (port.state === 'closed') closed++
       else filtered++
+      if (port.protocol === 'udp') {
+        udp++
+        if (port.state === 'open') udpOpen++
+      }
     }
   }
-  return { open, closed, filtered }
+  return { open, closed, filtered, udp, udpOpen }
 }
 
 const fmtGeo = (geo?: GeoInfo | null): string => {
@@ -511,10 +524,11 @@ export function getSelectionDetails(state: ScanState, selection: Selection): Sel
 
   if (selection.kind === 'port') {
     const ip = state.ips.find((entry) => entry.ip === selection.ip)
-    const port = ip?.ports[selection.port]
+    const port = ip?.ports[portKey(selection.port, selection.protocol ?? 'tcp')]
     if (!ip || !port) return null
     const rows = [
       { label: 'ENDPOINT', value: `${ip.ip}:${port.port}` },
+      { label: 'PROTOCOL', value: port.protocol.toUpperCase() },
       { label: 'STATE', value: port.state.toUpperCase() },
       { label: 'SERVICE', value: port.service || 'unknown' },
       { label: 'RTT', value: port.rtt != null ? `${port.rtt} ms` : '—' },
@@ -543,12 +557,20 @@ export function getSelectionDetails(state: ScanState, selection: Selection): Sel
         : undefined
 
     return {
-      eyebrow: 'SERVICE PORT',
+      eyebrow: port.protocol === 'udp' ? 'UDP SERVICE' : 'SERVICE PORT',
       title: `:${port.port}`,
-      subtitle: `${port.service || 'unknown service'} · ${port.state}`,
-      color: port.state === 'open' ? '#49ff9e' : port.state === 'filtered' ? '#8b94a8' : '#ff4d6d',
+      subtitle: `${port.service || 'unknown service'} · ${port.state} · ${port.protocol}`,
+      color:
+        port.state !== 'open'
+          ? port.state === 'filtered'
+            ? '#8b94a8'
+            : '#ff4d6d'
+          : port.protocol === 'udp'
+            ? '#ffb020'
+            : '#49ff9e',
       rows,
       block: tlsBlock,
+      cves: matchCvesForPort(ip, port),
     }
   }
 

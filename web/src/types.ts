@@ -1,4 +1,8 @@
 export type PortState = 'open' | 'closed' | 'filtered'
+export type Protocol = 'tcp' | 'udp'
+
+/** TCP and UDP can both use the same number, so the ports map is keyed by protocol. */
+export const portKey = (port: number, protocol: Protocol = 'tcp') => `${protocol}:${port}`
 
 export interface DnsEntry {
   address: string
@@ -35,6 +39,7 @@ export interface GeoInfo {
 
 export interface PortInfo {
   port: number
+  protocol: Protocol
   state: PortState
   rtt?: number
   service?: string | null
@@ -71,7 +76,7 @@ export interface IpEntry {
   ttl?: number | null
   ptr?: string | null
   geo?: GeoInfo | null
-  ports: Record<number, PortInfo>
+  ports: Record<string, PortInfo>
   tls?: (TlsInfo & { port: number }) | null
   http?: (HttpInfo & { port: number }) | null
   /** Every HTTP probe for this IP, so multiple web ports do not overwrite each other. */
@@ -107,6 +112,9 @@ export interface ScanStats {
   scanned: number
   ips: number
   hops: number
+  /** UDP probes (responsive or timed out) included in scanned. */
+  udp?: number
+  udpOpen?: number
   durationMs?: number
   portCount?: number
 }
@@ -169,12 +177,23 @@ export const initialState: ScanState = {
 export type Selection =
   | { kind: 'core' }
   | { kind: 'ip'; ip: string }
-  | { kind: 'port'; ip: string; port: number }
+  | { kind: 'port'; ip: string; port: number; protocol?: Protocol }
   | { kind: 'ns'; index: number }
   | { kind: 'mx'; index: number }
   | { kind: 'hop'; index: number }
   | { kind: 'you' }
   | null
+
+export interface SelectionCve {
+  id: string
+  severity: string
+  summary: string
+  product: string
+  version: string
+  fixed?: string
+  caveat?: string
+  evidence?: string
+}
 
 export interface SelectionDetails {
   eyebrow: string
@@ -184,6 +203,7 @@ export interface SelectionDetails {
   rows: { label: string; value: string }[]
   notes?: { label: string; value: string }[]
   block?: { title: string; rows: { label: string; value: string }[] }
+  cves?: SelectionCve[]
 }
 
 /* ------------------------------------------------------------------ */
@@ -230,6 +250,7 @@ export type ScanEvent =
       host: string
       isIp: boolean
       ports: number[]
+      udpPorts?: number[]
       traceroute: boolean
       geo: boolean
       startedAt: number
@@ -239,7 +260,7 @@ export type ScanEvent =
   | { type: 'ip'; ip: string; family: number; primary: boolean; ttl?: number | null }
   | { type: 'ptr'; ip: string; ptr: string }
   | { type: 'geo'; ip: string; geo: GeoInfo }
-  | { type: 'port'; ip: string; port: number; state: PortState; rtt?: number; service?: string | null; banner?: string; error?: string }
+  | { type: 'port'; ip: string; port: number; protocol?: Protocol; state: PortState; rtt?: number; service?: string | null; banner?: string; error?: string }
   | { type: 'tls'; ip: string; port: number } & TlsInfo
   | { type: 'http'; ip: string; port: number } & HttpInfo
   | { type: 'hop'; index: number; ip: string | null; rtt: number | null; timeout?: boolean }

@@ -11,8 +11,10 @@ import {
   TlsInfo,
   HttpInfo,
   PortInfo,
+  Protocol,
 } from './types'
 import { objectSummary } from './model'
+import { CveMatch, collectCves, severityLabel } from './cve'
 
 /* ------------------------------------------------------------------ */
 /*  report model                                                       */
@@ -20,6 +22,7 @@ import { objectSummary } from './model'
 
 export interface ReportPort {
   port: number
+  protocol: Protocol
   state: string
   service: string
   rtt: number | null
@@ -50,6 +53,7 @@ export interface ReportDoc {
   ips: ReportIp[]
   hops: HopInfo[]
   logs: LogEntry[]
+  cves: CveMatch[]
 }
 
 const portLabel = (port: PortInfo) => port.service || '—'
@@ -65,6 +69,7 @@ function reportIp(entry: IpEntry): ReportIp {
       .sort((a, b) => a.port - b.port)
       .map((port) => ({
         port: port.port,
+        protocol: port.protocol || 'tcp',
         state: port.state,
         service: portLabel(port),
         rtt: port.rtt ?? null,
@@ -89,6 +94,7 @@ export function buildReport(model: ScanState): ReportDoc {
     ips: model.ips.map(reportIp),
     hops: model.hops,
     logs: model.logs.slice(-60),
+    cves: collectCves(model),
   }
 }
 
@@ -172,8 +178,8 @@ function ipSection(ip: ReportIp): string {
   const openPorts = ip.ports.filter((port) => port.state === 'open').length
   const portRows = ip.ports
     .map(
-      (port) => `<tr class="state-${esc(port.state)}">
-        <td class="mono">${port.port}</td>
+      (port) => `<tr class="state-${esc(port.state)}${port.protocol === 'udp' ? ' proto-udp' : ''}">
+        <td class="mono">${port.port}<em class="proto">${esc(port.protocol)}</em></td>
         <td>${dash(stateLabel[port.state] || port.state)}</td>
         <td class="mono">${dash(port.service)}</td>
         <td class="mono">${port.rtt != null ? `${port.rtt} мс` : '—'}</td>
@@ -297,8 +303,25 @@ export function buildHtmlReport(model: ScanState, summary = objectSummary(model)
     .filter(Boolean)
     .join('')
 
-  const hops = model.hops.length
-    ? `<section class="block"><h2>Маршрут</h2><table class="hops"><thead><tr><th>#</th><th>IP</th><th>RTT</th><th>GEO</th></tr></thead><tbody>${model.hops
+  const cveRows = doc.cves
+    .map(
+      (match) => `<tr>
+        <td><span class="sev ${esc(match.severity)}">${esc(severityLabel[match.severity] || match.severity)}</span></td>
+        <td class="mono">${esc(match.id)}</td>
+        <td>${dash(`${match.product} ${match.version}`)}</td>
+        <td class="mono">${match.port}${match.protocol === 'udp' ? '/udp' : ''}</td>
+        <td>${esc(match.summary)}${match.fixed ? `<em class="fixed">исправлено в ${esc(match.fixed)}</em>` : ''}</td>
+      </tr>`,
+    )
+    .join('')
+
+  const cves = doc.cves.length
+    ? `<section class="block"><h2>Потенциальные уязвимости · эвристика</h2>
+        <p class="cve-warning">Совпадения получены по версиям из баннеров. Версия может быть неточной, а уязвимость — уже закрытой патчем. Это подсказка для ручной проверки, а не заключение аудита.</p>
+        <table class="cves"><thead><tr><th>Уровень</th><th>CVE</th><th>Сервис</th><th>Порт</th><th>Описание</th></tr></thead><tbody>${cveRows}</tbody></table></section>`
+    : ''
+
+  const hops = model.hops.length    ? `<section class="block"><h2>Маршрут</h2><table class="hops"><thead><tr><th>#</th><th>IP</th><th>RTT</th><th>GEO</th></tr></thead><tbody>${model.hops
         .map(
           (hop) => `<tr>
             <td class="mono">${hop.index}</td>
@@ -397,10 +420,20 @@ export function buildHtmlReport(model: ScanState, summary = objectSummary(model)
   td { padding: 5px 7px; border-bottom: 1px solid var(--line); vertical-align: top; }
   tr { break-inside: avoid; }
   .mono { font-family: "Cascadia Mono", Consolas, monospace; }
+  .proto { display: block; margin-top: 1px; font-style: normal; font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
+  .cve-warning { margin: 0 0 10px; padding: 8px 10px; border-left: 3px solid var(--bad); background: #fff5f6; color: #7d2431; font-size: 11px; line-height: 1.5; }
+  .sev { display: inline-block; padding: 1px 6px; font-size: 9px; letter-spacing: 0.06em; color: #fff; background: var(--bad); white-space: nowrap; }
+  .sev.high { background: #d1581f; }
+  .sev.medium { background: #a76700; }
+  .sev.low { background: #5d6b78; }
+  .cves td:nth-child(5) { max-width: 420px; }
+  .fixed { display: block; margin-top: 3px; font-style: normal; font-size: 10px; color: var(--good); }
   td.banner { max-width: 360px; overflow-wrap: anywhere; }
   .state-open td:first-child { color: var(--good); font-weight: 700; }
   .state-closed td:first-child { color: var(--bad); }
   .state-filtered td:first-child { color: var(--warn); }
+  .proto-udp.state-open td:first-child,
+  .proto-udp.state-filtered td:first-child { color: var(--warn); }
   .dns-block { margin-top: 10px; }
   .dns-block ul { margin: 0; padding-left: 18px; }
   .dns-block li { margin: 1px 0; overflow-wrap: anywhere; }
@@ -462,6 +495,7 @@ export function buildHtmlReport(model: ScanState, summary = objectSummary(model)
   <h2>Узлы и порты</h2>
   ${doc.ips.length ? doc.ips.map(ipSection).join('') : '<p>Нет данных.</p>'}
 
+  ${cves}
   ${hops}
   ${rdap}
   ${log}

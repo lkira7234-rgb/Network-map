@@ -21,6 +21,7 @@ export async function runDemo(emit, signal) {
     host,
     isIp: false,
     ports: [22, 80, 443, 8080, 8443, 3306, 5432, 6379, 9200, 27017],
+    udpPorts: [53, 123, 161],
     portTimeout: 1400,
     traceroute: true,
     geo: true,
@@ -124,6 +125,30 @@ export async function runDemo(emit, signal) {
     await send({ type: 'port', ip: secondary, ...p, rtt: p.rtt + 6 }, 35)
   }
 
+  const udpPorts = [
+    { port: 53, state: 'open', rtt: 19, service: 'dns', banner: 'DNS-ответ · 76 B · rcode 0' },
+    { port: 123, state: 'open', rtt: 23, service: 'ntp', banner: 'NTP v4 · stratum 2' },
+    {
+      port: 161,
+      state: 'filtered',
+      rtt: 1500,
+      service: 'snmp',
+      error: 'TIMEOUT',
+      banner: 'нет ответа · open|filtered',
+    },
+  ]
+
+  for (const p of udpPorts) {
+    await send({ type: 'port', ip: primary, protocol: 'udp', ...p }, 55)
+    if (p.state === 'open') {
+      await send({
+        type: 'log',
+        level: 'open',
+        message: `UDP ${primary}:${p.port} OPEN · ${p.service} · ${p.banner}`,
+      }, 25)
+    }
+  }
+
   await send({
     type: 'tls',
     ip: primary,
@@ -202,12 +227,14 @@ export async function runDemo(emit, signal) {
   await send({
     type: 'done',
     stats: {
-      open: 5,
+      open: 7,
       closed: 6,
-      filtered: 2,
-      scanned: ports.length + 4,
+      filtered: 4,
+      scanned: ports.length + 4 + udpPorts.length,
       ips: 3,
       hops: hops.length,
+      udp: udpPorts.length,
+      udpOpen: 2,
       durationMs: Math.round(performance.now() - started),
     },
   }, 0)

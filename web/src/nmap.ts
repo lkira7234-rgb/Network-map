@@ -1,4 +1,4 @@
-import { ScanEvent, PortState } from './types'
+import { Protocol, ScanEvent, PortState } from './types'
 
 /* Nmap / Masscan XML → the same event stream the live scanner produces. */
 
@@ -10,7 +10,7 @@ export interface NmapImport {
   events: ScanEvent[]
   hosts: number
   ports: number
-  udpSkipped: number
+  udpPorts: number
   scanner: string
 }
 
@@ -124,7 +124,7 @@ export function parseNmapXml(xml: string): NmapImport {
   const portSet = new Set<number>()
   let hostCount = 0
   let portCount = 0
-  let udpSkipped = 0
+  let udpPorts = 0
   let firstTarget = ''
 
   events.push({
@@ -192,13 +192,10 @@ export function parseNmapXml(xml: string): NmapImport {
       }
 
       for (const portElement of children(portsElement, 'port')) {
-        const protocol = attr(portElement, 'protocol') || 'tcp'
+        const protocol: Protocol = attr(portElement, 'protocol') === 'udp' ? 'udp' : 'tcp'
         const port = Number(attr(portElement, 'portid'))
         if (!Number.isFinite(port) || port <= 0 || port > 65535) continue
-        if (protocol !== 'tcp') {
-          udpSkipped += 1
-          continue
-        }
+        if (protocol === 'udp') udpPorts += 1
 
         const stateElement = child(portElement, 'state')
         const state = mapState(attr(stateElement, 'state'))
@@ -223,49 +220,54 @@ export function parseNmapXml(xml: string): NmapImport {
           type: 'port',
           ip: primaryIp,
           port,
+          protocol,
           state,
           service: service || null,
           banner: banner || undefined,
         })
 
-        const scripts = scriptOutputs(portElement)
-        const title = scripts.get('http-title')
-        const headersScript = scripts.get('http-headers')
-        const headers = headersScript ? parseHttpHeaders(attr(headersScript, 'output')) : null
+        if (protocol === 'tcp') {
+          const scripts = scriptOutputs(portElement)
+          const title = scripts.get('http-title')
+          const headersScript = scripts.get('http-headers')
+          const headers = headersScript ? parseHttpHeaders(attr(headersScript, 'output')) : null
 
-        if (title || headers) {
-          events.push({
-            type: 'http',
-            ip: primaryIp,
-            port,
-            status: headers?.status,
-            server: headers?.headers.server || product || undefined,
-            title: title ? clean(attr(title, 'output'), 200) : undefined,
-            headers: headers?.headers,
-          })
-        }
-
-        const cert = scripts.get('ssl-cert')
-        if (cert) {
-          const info = certInfo(cert)
-          const cipherScript = scripts.get('ssl-enum-ciphers')
-          const protocolTable = cipherScript
-            ? Array.from(cipherScript.getElementsByTagName('table')).find((item) =>
-                /^TLSv/.test(attr(item, 'key')),
-              )
-            : null
-          if (info.subject || info.issuer || info.validTo) {
+          if (title || headers) {
             events.push({
-              type: 'tls',
+              type: 'http',
               ip: primaryIp,
               port,
-              subject: info.subject,
-              issuer: info.issuer,
-              validFrom: info.validFrom,
-              validTo: info.validTo,
-              altNames: info.altNames,
-              protocol: protocolTable ? attr(protocolTable, 'key') : undefined,
+              status: headers?.status,
+              server: headers?.headers.server || product || undefined,
+              poweredBy: headers?.headers['x-powered-by'] || undefined,
+              contentType: headers?.headers['content-type'] || undefined,
+              title: title ? clean(attr(title, 'output'), 200) : undefined,
+              headers: headers?.headers,
             })
+          }
+
+          const cert = scripts.get('ssl-cert')
+          if (cert) {
+            const info = certInfo(cert)
+            const cipherScript = scripts.get('ssl-enum-ciphers')
+            const protocolTable = cipherScript
+              ? Array.from(cipherScript.getElementsByTagName('table')).find((item) =>
+                  /^TLSv/.test(attr(item, 'key')),
+                )
+              : null
+            if (info.subject || info.issuer || info.validTo) {
+              events.push({
+                type: 'tls',
+                ip: primaryIp,
+                port,
+                subject: info.subject,
+                issuer: info.issuer,
+                validFrom: info.validFrom,
+                validTo: info.validTo,
+                altNames: info.altNames,
+                protocol: protocolTable ? attr(protocolTable, 'key') : undefined,
+              })
+            }
           }
         }
       }
@@ -285,11 +287,11 @@ export function parseNmapXml(xml: string): NmapImport {
     startedAt,
   })
 
-  if (udpSkipped) {
+  if (udpPorts) {
     events.push({
       type: 'log',
       level: 'info',
-      message: `${plural(udpSkipped, ['UDP-порт', 'UDP-порта', 'UDP-портов'])} в отчёте: пока пропущены — импортируются только TCP.`,
+      message: `Импортировано ${plural(udpPorts, ['UDP-порт', 'UDP-порта', 'UDP-портов'])} — на карте они отмечены янтарным.`,
     })
   }
   const open = events.filter((event) => event.type === 'port' && event.state === 'open').length
@@ -315,6 +317,7 @@ export function parseNmapXml(xml: string): NmapImport {
       scanned: portCount,
       ips: hostCount,
       hops: 0,
+      udp: udpPorts,
       durationMs: 0,
       portCount: portSet.size,
     },
@@ -325,7 +328,7 @@ export function parseNmapXml(xml: string): NmapImport {
     events,
     hosts: hostCount,
     ports: portCount,
-    udpSkipped,
+    udpPorts,
     scanner: attr(root, 'scanner') || 'nmap',
   }
 }
