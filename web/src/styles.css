@@ -107,6 +107,14 @@ input {
   scrollbar-color: rgba(56, 246, 255, 0.25) transparent;
 }
 
+/* Panels must keep their natural height and overflow the column; otherwise
+   flex-shrink squashes the inspector down to its header and there is nothing
+   left to scroll to. */
+.left-col > *,
+.right-col > * {
+  flex: 0 0 auto;
+}
+
 .left-col::-webkit-scrollbar,
 .log::-webkit-scrollbar,
 .inspector::-webkit-scrollbar {
@@ -1389,6 +1397,147 @@ select.probe-input {
 }
 
 /* ------------------------------------------------------------------ */
+/*  basic configuration findings                                      */
+/* ------------------------------------------------------------------ */
+
+.findings-block {
+  margin-top: 9px;
+  padding: 8px 9px 7px;
+  border: 1px solid rgba(255, 176, 32, 0.3);
+  border-left: 3px solid #ffb020;
+  background: linear-gradient(100deg, rgba(255, 176, 32, 0.07), rgba(255, 176, 32, 0.015));
+}
+
+.findings-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.15em;
+  color: #ffd08a;
+}
+
+.findings-head b {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 500;
+  color: #ffb020;
+  text-shadow: 0 0 12px rgba(255, 176, 32, 0.45);
+}
+
+.finding-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: #c8bda5;
+  overflow-wrap: anywhere;
+}
+
+.finding-item i {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.finding-title {
+  flex: 1 1 auto;
+  color: #f2e2c2;
+}
+
+.finding-what {
+  flex: 0 0 auto;
+  color: #9b8f77;
+}
+
+.finding-more {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  color: #ffd08a;
+}
+
+.finding-note {
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  line-height: 1.5;
+  color: #7c7468;
+}
+
+.finding-detail {
+  border-top: 1px solid rgba(255, 176, 32, 0.26);
+}
+
+.finding-detail-item {
+  margin-top: 8px;
+  padding: 7px 8px;
+  border-left: 2px solid #ffb020;
+  background: rgba(255, 176, 32, 0.055);
+}
+
+.finding-detail-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: #ffe6c0;
+}
+
+.finding-detail-top b {
+  font-weight: 700;
+}
+
+.finding-detail-top em {
+  font-style: normal;
+  color: #b5a180;
+}
+
+.finding-sev {
+  padding: 1px 5px;
+  font-size: 7px;
+  letter-spacing: 0.1em;
+  color: #1a1002;
+  background: #ffb020;
+  white-space: nowrap;
+}
+
+.finding-sev.critical { background: #ff3b5c; color: #1a0207; }
+.finding-sev.high { background: #ff7a3d; color: #1a0a02; }
+.finding-sev.medium { background: #ffb020; }
+.finding-sev.low { background: #8b94a8; color: #0c1016; }
+.finding-sev.info { background: #38f6ff; }
+
+.finding-detail-item p {
+  margin: 5px 0 0;
+  font-size: 10px;
+  line-height: 1.45;
+  color: #cbbca6;
+}
+
+.finding-detail-item p.finding-evidence {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  color: #a89473;
+  overflow-wrap: anywhere;
+}
+
+.finding-detail-item p.finding-fix {
+  color: #9fd9b6;
+  font-size: 9px;
+}
+
+/* ------------------------------------------------------------------ */
 /*  telemetry                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -1613,19 +1762,19 @@ select.probe-input {
 /* ------------------------------------------------------------------ */
 
 .inspector {
-  max-height: 44vh;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(56, 246, 255, 0.25) transparent;
+  /* The whole left column is the scroll container. A nested scroller here
+     made the lower half of the inspector unreachable on desktop. */
+  max-height: none;
+  overflow: visible;
   animation: panel-in 0.25s ease-out;
 }
 
 .inspector .panel-head {
   position: sticky;
-  top: -14px;
+  top: 0;
   z-index: 2;
   padding-top: 4px;
-  background: linear-gradient(180deg, rgba(4, 14, 22, 0.98), rgba(4, 14, 22, 0.7));
+  background: linear-gradient(180deg, rgba(4, 14, 22, 0.99), rgba(4, 14, 22, 0.97));
   margin-bottom: 8px;
 }
 

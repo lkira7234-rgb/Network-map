@@ -195,6 +195,24 @@ export interface SelectionCve {
   evidence?: string
 }
 
+export type FindingSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
+
+export type FindingCategory = 'exposure' | 'tls' | 'http' | 'udp'
+
+/** A passive configuration check, not an exploit and not a CVE match. */
+export interface BasicFinding {
+  id: string
+  title: string
+  severity: FindingSeverity
+  category: FindingCategory
+  summary: string
+  recommendation: string
+  evidence?: string
+  ip: string
+  port?: number
+  protocol?: Protocol
+}
+
 export interface SelectionDetails {
   eyebrow: string
   title: string
@@ -204,6 +222,7 @@ export interface SelectionDetails {
   notes?: { label: string; value: string }[]
   block?: { title: string; rows: { label: string; value: string }[] }
   cves?: SelectionCve[]
+  findings?: BasicFinding[]
 }
 
 /* ------------------------------------------------------------------ */

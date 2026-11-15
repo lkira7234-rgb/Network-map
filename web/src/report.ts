@@ -1,4 +1,5 @@
 import {
+  BasicFinding,
   DnsRecords,
   GeoInfo,
   HopInfo,
@@ -15,6 +16,7 @@ import {
 } from './types'
 import { objectSummary } from './model'
 import { CveMatch, collectCves, severityLabel } from './cve'
+import { collectFindings, findingLabel } from './checks'
 
 /* ------------------------------------------------------------------ */
 /*  report model                                                       */
@@ -54,6 +56,7 @@ export interface ReportDoc {
   hops: HopInfo[]
   logs: LogEntry[]
   cves: CveMatch[]
+  findings: BasicFinding[]
 }
 
 const portLabel = (port: PortInfo) => port.service || '—'
@@ -95,6 +98,7 @@ export function buildReport(model: ScanState): ReportDoc {
     hops: model.hops,
     logs: model.logs.slice(-60),
     cves: collectCves(model),
+    findings: collectFindings(model),
   }
 }
 
@@ -315,6 +319,23 @@ export function buildHtmlReport(model: ScanState, summary = objectSummary(model)
     )
     .join('')
 
+  const findingRows = doc.findings
+    .map(
+      (finding) => `<tr>
+        <td><span class="sev ${esc(finding.severity)}">${esc(findingLabel[finding.severity] || finding.severity)}</span></td>
+        <td><b>${esc(finding.title)}</b><em class="finding-cat">${esc(finding.category)}</em></td>
+        <td class="mono">${esc(finding.ip)}${finding.port ? `:${finding.port}${finding.protocol === 'udp' ? '/udp' : ''}` : ''}</td>
+        <td>${esc(finding.summary)}${finding.evidence ? `<em class="finding-evidence">${esc(finding.evidence)}</em>` : ''}${finding.recommendation ? `<em class="finding-fix">→ ${esc(finding.recommendation)}</em>` : ''}</td>
+      </tr>`,
+    )
+    .join('')
+
+  const findingsSection = doc.findings.length
+    ? `<section class="block"><h2>Базовые проверки конфигурации</h2>
+        <p class="finding-warning">Пассивные проверки по уже открытым портам, баннерам, HTTP-заголовкам и сертификату. Уязвимости не эксплуатируются, результат — повод для ручной проверки, а не заключение аудита.</p>
+        <table class="findings"><thead><tr><th>Уровень</th><th>Проверка</th><th>Узел</th><th>Детали</th></tr></thead><tbody>${findingRows}</tbody></table></section>`
+    : ''
+
   const cves = doc.cves.length
     ? `<section class="block"><h2>Потенциальные уязвимости · эвристика</h2>
         <p class="cve-warning">Совпадения получены по версиям из баннеров. Версия может быть неточной, а уязвимость — уже закрытой патчем. Это подсказка для ручной проверки, а не заключение аудита.</p>
@@ -422,10 +443,16 @@ export function buildHtmlReport(model: ScanState, summary = objectSummary(model)
   .mono { font-family: "Cascadia Mono", Consolas, monospace; }
   .proto { display: block; margin-top: 1px; font-style: normal; font-size: 8px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
   .cve-warning { margin: 0 0 10px; padding: 8px 10px; border-left: 3px solid var(--bad); background: #fff5f6; color: #7d2431; font-size: 11px; line-height: 1.5; }
+  .finding-warning { margin: 0 0 10px; padding: 8px 10px; border-left: 3px solid var(--warn); background: #fff9ec; color: #6b4a00; font-size: 11px; line-height: 1.5; }
+  .findings td:nth-child(4) { max-width: 460px; }
+  .finding-cat { display: inline-block; margin-left: 6px; font-style: normal; font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  .finding-evidence { display: block; margin-top: 3px; font-style: normal; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 9px; color: var(--muted); word-break: break-word; }
+  .finding-fix { display: block; margin-top: 3px; font-style: normal; font-size: 10px; color: var(--good); }
   .sev { display: inline-block; padding: 1px 6px; font-size: 9px; letter-spacing: 0.06em; color: #fff; background: var(--bad); white-space: nowrap; }
   .sev.high { background: #d1581f; }
   .sev.medium { background: #a76700; }
   .sev.low { background: #5d6b78; }
+  .sev.info { background: #0d7f96; }
   .cves td:nth-child(5) { max-width: 420px; }
   .fixed { display: block; margin-top: 3px; font-style: normal; font-size: 10px; color: var(--good); }
   td.banner { max-width: 360px; overflow-wrap: anywhere; }
@@ -495,6 +522,7 @@ export function buildHtmlReport(model: ScanState, summary = objectSummary(model)
   <h2>Узлы и порты</h2>
   ${doc.ips.length ? doc.ips.map(ipSection).join('') : '<p>Нет данных.</p>'}
 
+  ${findingsSection}
   ${cves}
   ${hops}
   ${rdap}

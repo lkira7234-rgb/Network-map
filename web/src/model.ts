@@ -16,6 +16,7 @@ import {
   portKey,
 } from './types'
 import { matchCvesForPort } from './cve'
+import { findingsForIp, findingsForPort } from './checks'
 
 let logId = 0
 
@@ -519,6 +520,7 @@ export function getSelectionDetails(state: ScanState, selection: Selection): Sel
       color: '#38f6ff',
       rows,
       block,
+      findings: findingsForIp(ip, state.host || state.target || ''),
     }
   }
 
@@ -570,6 +572,7 @@ export function getSelectionDetails(state: ScanState, selection: Selection): Sel
             : '#49ff9e',
       rows,
       block: tlsBlock,
+      findings: findingsForPort(ip, port, state.host || state.target || ''),
       cves: matchCvesForPort(ip, port),
     }
   }

@@ -7,6 +7,7 @@ import { DEFAULT_FORM, PORT_PRESETS, ScanFormValues, formToUrl } from '../form'
 import { buildHtmlReport, buildReport, downloadText, printHtmlReport, reportFileName } from '../report'
 import { parseNmapXml, plural } from '../nmap'
 import { Severity, collectCves, severityColor, severityLabel } from '../cve'
+import { collectFindings, findingColor, findingLabel } from '../checks'
 
 interface HudProps {
   model: ScanState
@@ -85,6 +86,7 @@ export function Hud({
   const summary = objectSummary(model)
   const counts = portCounts(model)
   const cves = useMemo(() => collectCves(model), [model.ips])
+  const findings = useMemo(() => collectFindings(model), [model.ips, model.host, model.target])
   const primary = model.ips.find((ip) => ip.primary) || model.ips[0]
   const hasReport =
     model.phase !== 'idle' &&
@@ -547,6 +549,38 @@ export function Hud({
                 </p>
               </div>
             )}
+
+            {details.findings && details.findings.length > 0 && (
+              <div className="inspector-block finding-detail">
+                <h4 style={{ color: '#ffb020' }}>БАЗОВЫЕ УЯЗВИМОСТИ И МИСКОНФИГУРАЦИИ</h4>
+                {details.findings.map((finding) => (
+                  <div
+                    className="finding-detail-item"
+                    key={`${finding.id}-${finding.ip}-${finding.protocol}-${finding.port}`}
+                  >
+                    <div className="finding-detail-top">
+                      <span className={`finding-sev ${finding.severity}`}>
+                        {findingLabel[finding.severity]}
+                      </span>
+                      <b>{finding.title}</b>
+                      {finding.port && (
+                        <em>
+                          :{finding.port}
+                          {finding.protocol === 'udp' ? '/udp' : ''}
+                        </em>
+                      )}
+                    </div>
+                    <p>{finding.summary}</p>
+                    {finding.evidence && <p className="finding-evidence">{finding.evidence}</p>}
+                    <p className="finding-fix">→ {finding.recommendation}</p>
+                  </div>
+                ))}
+                <p className="cve-note">
+                  Проверка по открытым портам, баннерам и заголовкам. Она не эксплуатирует
+                  уязвимости и не заменяет аудит.
+                </p>
+              </div>
+            )}
           </section>
         )}
       </aside>
@@ -628,6 +662,33 @@ export function Hud({
                 ))}
                 {cves.length > 3 && <span className="cve-more">+{cves.length - 3} ещё в инспекторе</span>}
                 <p className="cve-note">Эвристика по баннерам, не заключение аудита.</p>
+              </div>
+            )}
+
+            {findings.length > 0 && (
+              <div className="findings-block">
+                <div className="findings-head">
+                  <span>БАЗОВЫЕ ПРОВЕРКИ</span>
+                  <b>{findings.length}</b>
+                </div>
+                {findings.slice(0, 3).map((finding) => (
+                  <div
+                    className="finding-item"
+                    key={`${finding.id}-${finding.ip}-${finding.protocol}-${finding.port}`}
+                  >
+                    <i style={{ background: findingColor[finding.severity] }} />
+                    <span className="finding-title">{finding.title}</span>
+                    <span className="finding-what">
+                      {finding.ip}
+                      {finding.port ? `:${finding.port}` : ''}
+                      {finding.protocol === 'udp' ? '/u' : ''}
+                    </span>
+                  </div>
+                ))}
+                {findings.length > 3 && (
+                  <span className="finding-more">+{findings.length - 3} ещё в инспекторе</span>
+                )}
+                <p className="finding-note">Пассивная проверка конфигурации, без эксплуатации.</p>
               </div>
             )}
           </section>
