@@ -3,13 +3,16 @@ import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Grid, Line, OrbitControls } from '@react-three/drei'
 import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing'
-import { ScanState, Selection } from '../types'
+import { ScanState, Selection, SubdomainInfo } from '../types'
 import {
   CORE_Y,
+  ClusterLayout,
+  ClusterMode,
   DnsNodeLayout,
   HopLayout,
   IpLayout,
   buildLayout,
+  buildSubdomainLayout,
   ipLinkPoints,
   shortName,
 } from '../layout'
@@ -25,6 +28,11 @@ interface SceneProps {
   mode: 'orbit' | 'fly'
   onExitFly: () => void
   resetSignal: number
+  cluster: ClusterMode
+  subdomains: SubdomainInfo[]
+  focusIps: string[]
+  focusSignal: number
+  onScanSubdomain: (name: string) => void
 }
 
 export function Scene(props: SceneProps) {
@@ -46,13 +54,42 @@ export function Scene(props: SceneProps) {
 /*  scene root                                                         */
 /* ------------------------------------------------------------------ */
 
-function SceneContent({ model, selection, onSelect, onHover, mode, onExitFly, resetSignal }: SceneProps) {
-  const layout = useMemo(() => buildLayout(model), [model.ips, model.hops, model.dns])
+function SceneContent({
+  model,
+  selection,
+  onSelect,
+  onHover,
+  mode,
+  onExitFly,
+  resetSignal,
+  cluster,
+  subdomains,
+  focusIps,
+  focusSignal,
+  onScanSubdomain,
+}: SceneProps) {
+  const layout = useMemo(
+    () => buildLayout(model, cluster),
+    [model.ips, model.hops, model.dns, cluster],
+  )
   const scanning = model.phase === 'scanning'
   const hasData = model.ips.length > 0
   const cves = useMemo(() => collectCves(model), [model.ips])
   const vulnerablePorts = useMemo(() => cvePortSet(cves), [cves])
   const vulnerableIps = useMemo(() => new Set(cves.map((match) => match.ip)), [cves])
+
+  const focusSet = useMemo(
+    () => (focusIps.length ? new Set(focusIps) : null),
+    [focusIps],
+  )
+  const focusPoints = useMemo(
+    () =>
+      focusSet
+        ? layout.ips.filter((node) => focusSet.has(node.entry.ip)).map((node) => node.pos)
+        : [],
+    [layout, focusSet],
+  )
+  const subLayout = useMemo(() => buildSubdomainLayout(subdomains.slice(0, 60).map((item) => item.name)), [subdomains])
 
   return (
     <>
@@ -64,7 +101,14 @@ function SceneContent({ model, selection, onSelect, onHover, mode, onExitFly, re
       <pointLight position={[-24, 14, -16]} intensity={180} distance={90} decay={2} color="#38f6ff" />
       <pointLight position={[24, 6, 18]} intensity={120} distance={80} decay={2} color="#8b5cff" />
 
-      <CameraRig mode={mode} onExitFly={onExitFly} resetSignal={resetSignal} hasSelection={selection != null} />
+      <CameraRig
+        mode={mode}
+        onExitFly={onExitFly}
+        resetSignal={resetSignal}
+        hasSelection={selection != null}
+        focusPoints={focusPoints}
+        focusSignal={focusSignal}
+      />
 
       <Starfield />
       <DustField />
@@ -80,6 +124,10 @@ function SceneContent({ model, selection, onSelect, onHover, mode, onExitFly, re
         onHover={onHover}
       />
 
+      {layout.clusters.map((group) => (
+        <ClusterShell key={`cluster-${group.key}`} group={group} />
+      ))}
+
       {hasData &&
         layout.ips.map((node) => (
           <IpSystem
@@ -90,13 +138,36 @@ function SceneContent({ model, selection, onSelect, onHover, mode, onExitFly, re
             onHover={onHover}
             vulnerablePorts={vulnerablePorts}
             vulnerable={vulnerableIps.has(node.entry.ip)}
+            dimmed={Boolean(focusSet && !focusSet.has(node.entry.ip))}
           />
         ))}
 
       {hasData &&
         layout.ips.map((node) => (
-          <IpLink key={`link-${node.entry.ip}`} from={layout.core} to={node.pos} color="#38f6ff" />
+          <IpLink
+            key={`link-${node.entry.ip}`}
+            from={layout.core}
+            to={node.pos}
+            color="#38f6ff"
+            ip={node.entry.ip}
+            onSelect={onSelect}
+            onHover={onHover}
+            dimmed={Boolean(focusSet && !focusSet.has(node.entry.ip))}
+          />
         ))}
+
+      {subLayout.map((node) => (
+        <SubdomainLink key={`sub-link-${node.name}`} from={layout.core} to={node.pos} />
+      ))}
+      {subLayout.map((node) => (
+        <SubdomainNode
+          key={`sub-${node.name}`}
+          name={node.name}
+          position={node.pos}
+          onScan={onScanSubdomain}
+          onHover={onHover}
+        />
+      ))}
 
       {hasData && (
         <Line
@@ -191,24 +262,58 @@ function CameraRig({
   onExitFly,
   resetSignal,
   hasSelection,
+  focusPoints,
+  focusSignal,
 }: {
   mode: 'orbit' | 'fly'
   onExitFly: () => void
   resetSignal: number
   hasSelection: boolean
+  focusPoints: THREE.Vector3[]
+  focusSignal: number
 }) {
   const controls = useRef<any>(null)
   const { camera } = useThree()
+  const desired = useRef(new THREE.Vector3(0, CORE_Y, 0))
+  const offset = useRef(new THREE.Vector3(0, 8, 24))
+  const flying = useRef(false)
 
   useEffect(() => {
     if (!resetSignal) return
     camera.position.set(0, 25, 54)
     camera.lookAt(0, CORE_Y, 0)
+    flying.current = false
     if (controls.current) {
       controls.current.target.set(0, CORE_Y, 0)
       controls.current.update()
     }
   }, [resetSignal, camera])
+
+  useEffect(() => {
+    if (!focusPoints.length) {
+      flying.current = false
+      return
+    }
+    const center = focusPoints
+      .reduce((acc, point) => acc.add(point), new THREE.Vector3())
+      .multiplyScalar(1 / focusPoints.length)
+    let spread = 0
+    for (const point of focusPoints) spread = Math.max(spread, point.distanceTo(center))
+    const distance = Math.max(16, Math.min(58, 21 + spread * 1.7))
+    desired.current.copy(center)
+    offset.current.set(0, distance * 0.34, distance)
+    flying.current = true
+  }, [focusSignal, focusPoints])
+
+  useFrame(() => {
+    const control = controls.current
+    if (!flying.current || !control) return
+    control.target.lerp(desired.current, 0.09)
+    const goal = desired.current.clone().add(offset.current)
+    camera.position.lerp(goal, 0.065)
+    control.update()
+    if (camera.position.distanceTo(goal) < 0.5) flying.current = false
+  })
 
   return (
     <>
@@ -226,6 +331,9 @@ function CameraRig({
         maxPolarAngle={Math.PI * 0.495}
         autoRotate={mode === 'orbit' && !hasSelection}
         autoRotateSpeed={0.3}
+        onStart={() => {
+          flying.current = false
+        }}
       />
       <FlyControls enabled={mode === 'fly'} onExit={onExitFly} />
     </>
@@ -545,13 +653,156 @@ function CoreNode({
 /*  IP systems                                                         */
 /* ------------------------------------------------------------------ */
 
-function IpLink({ from, to, color }: { from: THREE.Vector3; to: THREE.Vector3; color: string }) {
+function IpLink({
+  from,
+  to,
+  color,
+  ip,
+  onSelect,
+  onHover,
+  dimmed,
+}: {
+  from: THREE.Vector3
+  to: THREE.Vector3
+  color: string
+  ip: string
+  onSelect: (selection: Selection) => void
+  onHover: (text: string | null) => void
+  dimmed: boolean
+}) {
   const points = useMemo(() => ipLinkPoints(from, to), [from, to])
+  const { mid, quaternion, length } = useMemo(() => {
+    const direction = to.clone().sub(from)
+    return {
+      mid: from.clone().add(to).multiplyScalar(0.5),
+      quaternion: new THREE.Quaternion().setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0),
+        direction.clone().normalize(),
+      ),
+      length: direction.length(),
+    }
+  }, [from, to])
+  const handlers = useHoverHandlers(onHover, `${ip} · link · клик — пакет обмена`)
+
   return (
     <>
-      <Line points={points} color={color} lineWidth={1} transparent opacity={0.32} toneMapped={false} />
-      <FlowingDots points={points} color={color} count={3} speed={0.14} radius={0.08} />
+      <Line
+        points={points}
+        color={color}
+        lineWidth={1}
+        transparent
+        opacity={dimmed ? 0.05 : 0.32}
+        toneMapped={false}
+      />
+      {!dimmed && <FlowingDots points={points} color={color} count={3} speed={0.14} radius={0.08} />}
+      <mesh
+        position={mid}
+        quaternion={quaternion}
+        {...handlers}
+        onClick={(event) => {
+          event.stopPropagation()
+          onSelect({ kind: 'link', ip })
+        }}
+      >
+        <cylinderGeometry args={[0.55, 0.55, length, 6]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
     </>
+  )
+}
+
+function ClusterShell({ group }: { group: ClusterLayout }) {
+  return (
+    <group position={group.pos}>
+      <mesh>
+        <sphereGeometry args={[group.radius, 20, 14]} />
+        <meshBasicMaterial color="#38f6ff" wireframe transparent opacity={0.06} depthWrite={false} toneMapped={false} />
+      </mesh>
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[group.radius, group.radius + 0.06, 96]} />
+        <meshBasicMaterial
+          color="#8b5cff"
+          transparent
+          opacity={0.25}
+          side={THREE.DoubleSide}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </mesh>
+      <Label
+        text={`${group.label} · ${group.count}`}
+        color="#9ad8ff"
+        position={[0, group.radius + 0.9, 0]}
+        scale={0.86}
+        opacity={0.8}
+      />
+    </group>
+  )
+}
+
+function SubdomainLink({ from, to }: { from: THREE.Vector3; to: THREE.Vector3 }) {
+  const points = useMemo(() => [from, to], [from, to])
+  return (
+    <Line
+      points={points}
+      color="#8b5cff"
+      lineWidth={0.6}
+      dashed
+      dashSize={0.45}
+      gapSize={0.45}
+      transparent
+      opacity={0.16}
+      toneMapped={false}
+    />
+  )
+}
+
+function SubdomainNode({
+  name,
+  position,
+  onScan,
+  onHover,
+}: {
+  name: string
+  position: THREE.Vector3
+  onScan: (name: string) => void
+  onHover: (text: string | null) => void
+}) {
+  const mesh = useRef<THREE.Mesh>(null)
+  const handlers = useHoverHandlers(onHover, `CT · ${name} · клик — быстрый скан`)
+
+  useFrame(({ clock }) => {
+    if (!mesh.current) return
+    mesh.current.rotation.y = clock.elapsedTime * 0.6
+    mesh.current.rotation.x = Math.sin(clock.elapsedTime * 0.5) * 0.25
+  })
+
+  return (
+    <group position={position}>
+      <mesh
+        ref={mesh}
+        {...handlers}
+        onClick={(event) => {
+          event.stopPropagation()
+          onScan(name)
+        }}
+      >
+        <octahedronGeometry args={[0.34, 0]} />
+        <meshBasicMaterial color="#a48bff" wireframe transparent opacity={0.92} toneMapped={false} />
+      </mesh>
+      <mesh scale={0.3}>
+        <octahedronGeometry args={[0.34, 0]} />
+        <meshBasicMaterial color="#a48bff" transparent opacity={0.5} toneMapped={false} />
+      </mesh>
+      <Glow color="#8b5cff" scale={2.4} opacity={0.4} />
+      <Label
+        text={shortName(name, 30)}
+        color="#c9b8ff"
+        position={[0, 0.9, 0]}
+        scale={0.74}
+        opacity={0.85}
+      />
+    </group>
   )
 }
 
@@ -562,6 +813,7 @@ function IpSystem({
   onHover,
   vulnerablePorts,
   vulnerable,
+  dimmed,
 }: {
   node: IpLayout
   selection: Selection
@@ -569,6 +821,7 @@ function IpSystem({
   onHover: (text: string | null) => void
   vulnerablePorts: Set<string>
   vulnerable: boolean
+  dimmed: boolean
 }) {
   const body = useRef<THREE.Mesh>(null)
   const vulnCount = node.open.filter((port) =>
@@ -639,7 +892,7 @@ function IpSystem({
         <meshBasicMaterial
           color="#38f6ff"
           transparent
-          opacity={0.18}
+          opacity={dimmed ? 0.04 : 0.18}
           depthWrite={false}
           blending={THREE.AdditiveBlending}
           toneMapped={false}
@@ -652,7 +905,7 @@ function IpSystem({
           color={vulnerable ? '#ff3b5c' : node.entry.primary ? '#38f6ff' : '#91a9ff'}
           wireframe
           transparent
-          opacity={0.95}
+          opacity={dimmed ? 0.12 : 0.95}
           toneMapped={false}
         />
       </mesh>
@@ -661,16 +914,25 @@ function IpSystem({
         <meshBasicMaterial
           color={vulnerable ? '#ff3b5c' : node.entry.primary ? '#38f6ff' : '#91a9ff'}
           transparent
-          opacity={0.55}
+          opacity={dimmed ? 0.06 : 0.55}
           toneMapped={false}
         />
       </mesh>
 
-      <Glow color={vulnerable ? '#ff3b5c' : '#38f6ff'} scale={4.6} opacity={vulnerable ? 0.7 : 0.5} />
+      <Glow
+        color={vulnerable ? '#ff3b5c' : '#38f6ff'}
+        scale={4.6}
+        opacity={dimmed ? 0.05 : vulnerable ? 0.7 : 0.5}
+      />
       {vulnerable && (
         <mesh rotation={[Math.PI / 2, 0, 0]}>
           <torusGeometry args={[1.55, 0.028, 8, 96]} />
-          <meshBasicMaterial color="#ff3b5c" transparent opacity={0.85} toneMapped={false} />
+          <meshBasicMaterial
+            color="#ff3b5c"
+            transparent
+            opacity={dimmed ? 0.12 : 0.85}
+            toneMapped={false}
+          />
         </mesh>
       )}
       {selected && (
@@ -685,13 +947,14 @@ function IpSystem({
         color={node.entry.primary ? '#7fe9ff' : '#aebcff'}
         position={[0, 1.45, 0]}
         scale={1.28}
+        opacity={dimmed ? 0.14 : 1}
       />
       <Label
         text={shortName(node.entry.ptr || node.entry.geo?.city || `IPv${node.entry.family}`, 24)}
         color="#6aa6b8"
         position={[0, 0.84, 0]}
         scale={0.7}
-        opacity={0.85}
+        opacity={dimmed ? 0.1 : 0.85}
       />
 
       <points geometry={closedPoints}>
@@ -699,7 +962,7 @@ function IpSystem({
           size={0.17}
           vertexColors
           transparent
-          opacity={0.85}
+          opacity={dimmed ? 0.08 : 0.85}
           sizeAttenuation
           depthWrite={false}
           toneMapped={false}
@@ -725,7 +988,7 @@ function IpSystem({
               color={accent}
               lineWidth={0.6}
               transparent
-              opacity={0.22}
+              opacity={dimmed ? 0.04 : 0.22}
             />
             <mesh
               position={local}
@@ -758,18 +1021,23 @@ function IpSystem({
               <meshBasicMaterial
                 color={isSelected ? '#ffffff' : accent}
                 transparent
-                opacity={0.98}
+                opacity={dimmed ? 0.12 : 0.98}
                 toneMapped={false}
               />
             </mesh>
-            <Glow color={accent} scale={1.1} position={[local.x, local.y, local.z]} opacity={0.5} />
+            <Glow
+              color={accent}
+              scale={1.1}
+              position={[local.x, local.y, local.z]}
+              opacity={dimmed ? 0.05 : 0.5}
+            />
             {index < portLabelLimit && (
               <Label
                 text={`:${port.info.port}${udp ? '/u' : ''}`}
                 color={isVulnerable ? '#ff9baf' : udp ? '#ffd291' : '#7dffc0'}
                 position={[local.x, local.y + 0.4, local.z]}
                 scale={0.62}
-                opacity={0.9}
+                opacity={dimmed ? 0.08 : 0.9}
               />
             )}
           </group>

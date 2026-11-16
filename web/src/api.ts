@@ -109,3 +109,27 @@ export async function streamDemo(onEvent: (event: ScanEvent) => void, signal: Ab
   await assertOk(response)
   await readNdjson(response, onEvent, signal)
 }
+
+export interface SubdomainResponse {
+  host: string
+  total: number
+  subdomains: string[]
+  truncated?: boolean
+  cached?: boolean
+}
+
+export async function fetchSubdomains(host: string, signal?: AbortSignal): Promise<SubdomainResponse> {
+  const response = await fetch(`${API_BASE}/api/subdomains?host=${encodeURIComponent(host)}`, {
+    signal,
+    headers: { Accept: 'application/json' },
+  })
+  await assertOk(response)
+  const data = (await response.json()) as SubdomainResponse
+  return {
+    host: data.host || host,
+    total: Number(data.total) || data.subdomains?.length || 0,
+    subdomains: Array.isArray(data.subdomains) ? data.subdomains.map(String) : [],
+    truncated: Boolean(data.truncated),
+    cached: Boolean(data.cached),
+  }
+}

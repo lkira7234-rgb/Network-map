@@ -13,10 +13,12 @@ import {
   HttpInfo,
   PortInfo,
   Protocol,
+  TechHit,
 } from './types'
 import { objectSummary } from './model'
 import { CveMatch, collectCves, severityLabel } from './cve'
 import { collectFindings, findingLabel } from './checks'
+import { collectTech, techForIp } from './tech'
 
 /* ------------------------------------------------------------------ */
 /*  report model                                                       */
@@ -40,6 +42,7 @@ export interface ReportIp {
   ports: ReportPort[]
   tls: (TlsInfo & { port: number }) | null
   http: (HttpInfo & { port: number })[]
+  tech: TechHit[]
 }
 
 export interface ReportDoc {
@@ -57,9 +60,17 @@ export interface ReportDoc {
   logs: LogEntry[]
   cves: CveMatch[]
   findings: BasicFinding[]
+  tech: TechHit[]
 }
 
 const portLabel = (port: PortInfo) => port.service || '—'
+
+/** HTTP bodies are never exported — only the passive signals used on screen. */
+function reportHttp(entry: HttpInfo): HttpInfo {
+  const copy: HttpInfo = { ...entry }
+  delete copy.bodySample
+  return copy
+}
 
 function reportIp(entry: IpEntry): ReportIp {
   return {
@@ -80,6 +91,7 @@ function reportIp(entry: IpEntry): ReportIp {
       })),
     tls: entry.tls ?? null,
     http: entry.httpAll?.length ? entry.httpAll : entry.http ? [entry.http] : [],
+    tech: techForIp(entry),
   }
 }
 
@@ -99,6 +111,7 @@ export function buildReport(model: ScanState): ReportDoc {
     logs: model.logs.slice(-60),
     cves: collectCves(model),
     findings: collectFindings(model),
+    tech: collectTech(model),
   }
 }
 
@@ -234,6 +247,18 @@ function ipSection(ip: ReportIp): string {
         <span class="badge ${openPorts ? 'good' : ''}">${openPorts} открыто</span>
       </div>
     </div>
+    ${
+      ip.tech.length
+        ? `<div class="tech-row">${ip.tech
+            .map(
+              (hit) =>
+                `<span class="tech-chip">${esc(hit.name)}${
+                  hit.version ? `<em>${esc(hit.version)}</em>` : ''
+                }</span>`,
+            )
+            .join('')}</div>`
+        : ''
+    }
     ${rows([
       ['PTR', dash(ip.ptr)],
       ['GEO', esc(fmtGeo(ip.geo))],
@@ -336,6 +361,19 @@ export function buildHtmlReport(model: ScanState, summary = objectSummary(model)
         <table class="findings"><thead><tr><th>Уровень</th><th>Проверка</th><th>Узел</th><th>Детали</th></tr></thead><tbody>${findingRows}</tbody></table></section>`
     : ''
 
+  const techSection = doc.tech.length
+    ? `<section class="block"><h2>Стек технологий</h2>
+        <div class="tech-row">${doc.tech
+          .map(
+            (hit) =>
+              `<span class="tech-chip">${esc(hit.name)}${
+                hit.version ? `<em>${esc(hit.version)}</em>` : ''
+              }</span>`,
+          )
+          .join('')}</div>
+        <p class="tech-warning">Определено локально по заголовкам, именам cookie, meta generator и HTML-сэмплу. Источник — пассивные сигналы скана, без дополнительных запросов.</p></section>`
+    : ''
+
   const cves = doc.cves.length
     ? `<section class="block"><h2>Потенциальные уязвимости · эвристика</h2>
         <p class="cve-warning">Совпадения получены по версиям из баннеров. Версия может быть неточной, а уязвимость — уже закрытой патчем. Это подсказка для ручной проверки, а не заключение аудита.</p>
@@ -435,6 +473,10 @@ export function buildHtmlReport(model: ScanState, summary = objectSummary(model)
   .badge { font-size: 9px; letter-spacing: 0.08em; padding: 2px 6px; border: 1px solid var(--line); color: var(--muted); }
   .badge.primary { border-color: var(--accent); color: var(--accent); }
   .badge.good { border-color: var(--good); color: var(--good); }
+  .tech-row { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+  .tech-chip { display: inline-flex; align-items: baseline; gap: 3px; padding: 1px 6px; font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: 9px; color: #0a6577; border: 1px solid #b9dde4; background: #f1fbfd; }
+  .tech-chip em { font-style: normal; font-size: 8px; color: #5c7f88; }
+  .tech-warning { margin: 0 0 10px; padding: 8px 10px; border-left: 3px solid var(--accent); background: #f1fbfd; color: #235b68; font-size: 11px; line-height: 1.5; }
   .sub { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); }
   table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
   th { text-align: left; padding: 5px 7px; background: #eef3f6; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
@@ -522,6 +564,7 @@ export function buildHtmlReport(model: ScanState, summary = objectSummary(model)
   <h2>Узлы и порты</h2>
   ${doc.ips.length ? doc.ips.map(ipSection).join('') : '<p>Нет данных.</p>'}
 
+  ${techSection}
   ${findingsSection}
   ${cves}
   ${hops}

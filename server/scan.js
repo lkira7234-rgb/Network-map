@@ -505,6 +505,7 @@ function probeHttp({ ip, port, hostname, secure, timeoutMs }) {
               contentType: res.headers['content-type'] || null,
               title,
               headers: pickHeaders(res.headers),
+              ...httpExtras(body, res.headers),
             })
           }
         })
@@ -516,6 +517,7 @@ function probeHttp({ ip, port, hostname, secure, timeoutMs }) {
             contentType: res.headers['content-type'] || null,
             title: extractTitle(body),
             headers: pickHeaders(res.headers),
+            ...httpExtras(body, res.headers),
           })
         })
         res.on('error', () => finish(null))
@@ -526,6 +528,37 @@ function probeHttp({ ip, port, hostname, secure, timeoutMs }) {
     req.on('error', () => finish(null))
     req.end()
   })
+}
+
+/**
+ * Compact, non-sensitive signals for client-side stack detection. Only cookie
+ * *names* are kept (never values), the body is capped and only for markup.
+ */
+function httpExtras(body, headers) {
+  const cookies = []
+  const raw = headers['set-cookie']
+  for (const item of Array.isArray(raw) ? raw : raw ? [raw] : []) {
+    const name = String(item).split('=')[0].trim()
+    if (name && !cookies.includes(name)) cookies.push(name.slice(0, 40))
+  }
+
+  let generator = null
+  for (const match of body.matchAll(/<meta\b[^>]*>/gi)) {
+    if (!/name=["']generator["']/i.test(match[0])) continue
+    const content = /content=["']([^"']{1,80})/i.exec(match[0])
+    if (content) {
+      generator = content[1].trim()
+      break
+    }
+  }
+
+  const contentType = String(headers['content-type'] || '')
+  const isMarkup = /html|xml|text\/plain/i.test(contentType) || (!contentType && /<html|<meta|<script/i.test(body))
+  return {
+    cookies: cookies.slice(0, 12),
+    generator,
+    bodySample: isMarkup ? body.slice(0, 16000) : undefined,
+  }
 }
 
 function pickHeaders(headers) {

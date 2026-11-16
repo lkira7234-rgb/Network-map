@@ -577,9 +577,15 @@ export function findingsForPort(ip: IpEntry, port: PortInfo, host = ''): BasicFi
 }
 
 export function collectFindings(state: ScanState): BasicFinding[] {
-  return sortFindings(
-    state.ips.flatMap((ip) => findingsForIp(ip, state.host || state.target || '')),
-  )
+  const merged = new Map<string, BasicFinding>()
+  for (const finding of [
+    ...state.ips.flatMap((ip) => findingsForIp(ip, state.host || state.target || '')),
+    ...(state.extraFindings || []),
+  ]) {
+    const key = `${finding.id}|${finding.ip}|${finding.port ?? ''}|${finding.protocol ?? ''}`
+    if (!merged.has(key)) merged.set(key, finding)
+  }
+  return sortFindings([...merged.values()])
 }
 
 export function findingsForNode(findings: BasicFinding[], ip: string): BasicFinding[] {

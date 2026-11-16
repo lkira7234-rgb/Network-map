@@ -2,9 +2,11 @@ import {
   DnsRecords,
   GeoInfo,
   HopInfo,
+  HttpInfo,
   IpEntry,
   LogEntry,
   ObjectSummary,
+  PortInfo,
   ScanEvent,
   ScanState,
   Selection,
@@ -17,6 +19,7 @@ import {
 } from './types'
 import { matchCvesForPort } from './cve'
 import { findingsForIp, findingsForPort } from './checks'
+import { techForHttp, techForIp } from './tech'
 
 let logId = 0
 
@@ -190,6 +193,10 @@ export function scanReducer(state: ScanState, action: ScanAction): ScanState {
         contentType: event.contentType,
         title: event.title,
         headers: event.headers,
+        cookies: event.cookies,
+        generator: event.generator,
+        bodySample: event.bodySample,
+        tech: event.tech,
       }
       const previous = state.ips.find((ip) => ip.ip === event.ip)
       const httpAll = [...(previous?.httpAll || []).filter((item) => item.port !== event.port), entry].sort(
@@ -212,6 +219,18 @@ export function scanReducer(state: ScanState, action: ScanAction): ScanState {
 
     case 'rdap':
       return log({ ...state, rdap: event.rdap }, 'info', 'RDAP: данные регистратора получены')
+
+    case 'finding': {
+      const key = `${event.finding.id}|${event.finding.ip}|${event.finding.port ?? ''}|${event.finding.protocol ?? ''}`
+      const exists = state.extraFindings.some(
+        (item) => `${item.id}|${item.ip}|${item.port ?? ''}|${item.protocol ?? ''}` === key,
+      )
+      if (exists) return state
+      return {
+        ...state,
+        extraFindings: [...state.extraFindings, event.finding],
+      }
+    }
 
     case 'log':
       return log(state, event.level, event.message)
@@ -284,6 +303,119 @@ const fmtGeo = (geo?: GeoInfo | null): string => {
   if (!geo) return '—'
   return [geo.city, geo.country].filter(Boolean).join(', ') || '—'
 }
+
+/* ------------------------------------------------------------------ */
+/*  packet inspector                                                   */
+/* ------------------------------------------------------------------ */
+
+const REASONS: Record<number, string> = {
+  200: 'OK',
+  201: 'Created',
+  204: 'No Content',
+  301: 'Moved Permanently',
+  302: 'Found',
+  303: 'See Other',
+  304: 'Not Modified',
+  307: 'Temporary Redirect',
+  308: 'Permanent Redirect',
+  400: 'Bad Request',
+  401: 'Unauthorized',
+  403: 'Forbidden',
+  404: 'Not Found',
+  405: 'Method Not Allowed',
+  429: 'Too Many Requests',
+  500: 'Internal Server Error',
+  502: 'Bad Gateway',
+  503: 'Service Unavailable',
+  504: 'Gateway Timeout',
+}
+
+const HTTP_PORT_NUMBERS = new Set([80, 81, 443, 8000, 8008, 8080, 8081, 8443, 8888, 9000, 9443])
+
+function httpEntries(ip: IpEntry) {
+  return ip.httpAll?.length ? ip.httpAll : ip.http ? [ip.http] : []
+}
+
+function requestText(host: string): string {
+  return [
+    'GET / HTTP/1.1',
+    `Host: ${host || '—'}`,
+    'User-Agent: NetworkMap/1.0 (topology visualizer)',
+    'Accept: text/html,application/xhtml+xml,*/*;q=0.8',
+    'Connection: close',
+  ].join('\r\n')
+}
+
+function responseText(http: HttpInfo): string {
+  const status = http.status ?? 0
+  const lines = [`HTTP/1.1 ${status} ${REASONS[status] || 'Unknown'}`]
+  for (const [key, value] of Object.entries(http.headers || {})) {
+    lines.push(`${key}: ${value}`)
+  }
+  if (http.title) lines.push('', `<!-- <title>${http.title}</title> -->`)
+  return lines.join('\r\n')
+}
+
+function packetFor(ip: IpEntry, host: string, port?: PortInfo): SelectionDetails['packet'] {
+  const entries = httpEntries(ip)
+  const http =
+    port != null
+      ? entries.find((entry) => entry.port === port.port)
+      : entries.find((entry) => entry.port === 443) ||
+        entries.slice().sort((a, b) => a.port - b.port)[0]
+
+  if (http) {
+    return {
+      label: `HTTP · :${http.port}`,
+      request: requestText(host),
+      response: responseText(http),
+      note:
+        port != null
+          ? 'Обмен захвачен скан-запросом GET / по этому порту. Тело ответа не сохраняется.'
+          : 'Это реальный обмен, который выполнил сканер при проверке HTTP на узле.',
+    }
+  }
+
+  const tls = port ? (ip.tls?.port === port.port ? ip.tls : null) : ip.tls
+  if (tls) {
+    return {
+      label: `TLS · :${tls.port}`,
+      request: 'TLS ClientHello (SNI, ALPN h2, http/1.1)',
+      response: [
+        `Protocol: ${tls.protocol || '—'}`,
+        `Cipher: ${tls.cipher || '—'}`,
+        `Subject: ${tls.subject || '—'}`,
+        `Issuer: ${tls.issuer || '—'}`,
+        `Valid to: ${tls.validTo || '—'}`,
+        `ALPN: ${tls.alpn || '—'}`,
+      ].join('\r\n'),
+      note: 'Показан результат TLS-рукопожатия. Приватный ключ и сессия не сохраняются.',
+    }
+  }
+
+  if (port?.banner) {
+    return {
+      label: `BANNER · :${port.port}`,
+      response: port.banner,
+      note:
+        port.protocol === 'udp'
+          ? 'UDP-сервис ответил на минимальную пробу. Полный диалог не ведётся.'
+          : 'Сканер подключился и прочитал приветствие сервиса, не отправляя команд.',
+    }
+  }
+
+  if (port && HTTP_PORT_NUMBERS.has(port.port)) {
+    return {
+      label: `HTTP · :${port.port}`,
+      request: requestText(host),
+      response: '— ответ не получен (таймаут или порт не HTTP) —',
+      note: 'Соединение установлено, но корректного HTTP-ответа не было.',
+    }
+  }
+
+  return undefined
+}
+
 
 /* ------------------------------------------------------------------ */
 /*  object summary                                                     */
@@ -521,6 +653,29 @@ export function getSelectionDetails(state: ScanState, selection: Selection): Sel
       rows,
       block,
       findings: findingsForIp(ip, state.host || state.target || ''),
+      tech: techForIp(ip),
+      packet: packetFor(ip, state.host || state.target || ''),
+    }
+  }
+
+  if (selection.kind === 'link') {
+    const ip = state.ips.find((entry) => entry.ip === selection.ip)
+    if (!ip) return null
+    const counts = portCounts({ ...state, ips: [ip] })
+    const open = Object.values(ip.ports).filter((port) => port.state === 'open')
+    return {
+      eyebrow: 'LINK INSPECTOR',
+      title: `${state.host || state.target || 'target'} → ${ip.ip}`,
+      subtitle: `${counts.open} open · ${ip.ptr || fmtGeo(ip.geo)}`,
+      color: '#38f6ff',
+      rows: [
+        { label: 'FROM', value: state.host || state.target || '—' },
+        { label: 'TO', value: ip.ip },
+        { label: 'ASN', value: ip.geo?.asn || '—' },
+        { label: 'OPEN PORTS', value: open.map((port) => `${port.port}${port.protocol === 'udp' ? '/u' : ''}`).join(', ') || '—' },
+        { label: 'TLS', value: ip.tls ? `${ip.tls.protocol || 'TLS'} · ${ip.tls.issuer || '—'}` : '—' },
+      ],
+      packet: packetFor(ip, state.host || state.target || ''),
     }
   }
 
@@ -574,6 +729,10 @@ export function getSelectionDetails(state: ScanState, selection: Selection): Sel
       block: tlsBlock,
       findings: findingsForPort(ip, port, state.host || state.target || ''),
       cves: matchCvesForPort(ip, port),
+      tech: httpEntries(ip).find((entry) => entry.port === port.port)
+        ? techForHttp(httpEntries(ip).find((entry) => entry.port === port.port)!)
+        : undefined,
+      packet: packetFor(ip, state.host || state.target || '', port),
     }
   }
 

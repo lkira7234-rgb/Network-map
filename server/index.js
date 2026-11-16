@@ -20,6 +20,13 @@ const DEMO_LIMIT = Math.max(1, Number(process.env.DEMO_LIMIT) || 10)
 
 const scanLimiter = createRateLimiter({ limit: SCAN_LIMIT, windowMs: SCAN_WINDOW_MS })
 const demoLimiter = createRateLimiter({ limit: DEMO_LIMIT, windowMs: SCAN_WINDOW_MS })
+const subLimiter = createRateLimiter({ limit: 20, windowMs: SCAN_WINDOW_MS })
+
+// crt.sh is slow and rate-sensitive, so a short server-side cache keeps repeat
+// lookups instant and polite.
+const subCache = new Map()
+const SUB_CACHE_MS = 10 * 60_000
+const SUB_MAX = 200
 
 const app = express()
 app.disable('x-powered-by')
@@ -203,6 +210,113 @@ app.get('/api/demo', async (req, res) => {
     return
   }
   await streamNdjson(res, (emit, signal) => runDemo(emit, signal))
+})
+
+/* ------------------------------------------------------------------ */
+/*  certificate transparency                                           */
+/* ------------------------------------------------------------------ */
+
+function normalizeDomain(raw) {
+  let value = String(raw || '').trim().toLowerCase()
+  if (!value) throw new Error('Укажи домен')
+  value = value.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').replace(/[/?#].*$/, '').replace(/\.$/, '')
+  if (value.includes('@')) value = value.split('@').pop()
+  if (!value) throw new Error('Укажи домен')
+  if (/^[0-9.]+$/.test(value) || value.includes(':')) {
+    throw new Error('Это IP-адрес: поддомены ищутся только для домена')
+  }
+  if (!/^(?=.{4,253}$)(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(value)) {
+    throw new Error('Некорректный домен')
+  }
+  return value
+}
+
+app.get('/api/subdomains', async (req, res) => {
+  let host
+  try {
+    host = normalizeDomain(req.query.host)
+  } catch (err) {
+    res.status(400).json({ error: err?.message || 'Некорректный домен' })
+    return
+  }
+
+  const limit = subLimiter.take(req.ip)
+  setRateLimitHeaders(res, limit)
+  if (!limit.ok) {
+    sendRateLimited(res, limit)
+    return
+  }
+
+  const cached = subCache.get(host)
+  if (cached && Date.now() - cached.at < SUB_CACHE_MS) {
+    res.setHeader('Cache-Control', 'no-store')
+    res.json({ ...cached.payload, cached: true })
+    return
+  }
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 15_000)
+  try {
+    const response = await fetch(
+      `https://crt.sh/?q=${encodeURIComponent(`%.${host}`)}&output=json`,
+      {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'NetworkMap/1.0 (subdomain discovery)',
+        },
+        signal: controller.signal,
+      },
+    )
+    if (!response.ok) throw new Error(`crt.sh ответил ${response.status}`)
+    const text = await response.text()
+    if (text.length > 8_000_000) throw new Error('слишком большой ответ')
+    let rows = []
+    try {
+      rows = JSON.parse(text)
+    } catch {
+      throw new Error('crt.sh вернул не JSON')
+    }
+    if (!Array.isArray(rows)) throw new Error('crt.sh вернул неожиданный формат')
+
+    const names = new Set()
+    for (const row of rows) {
+      const candidates = [row?.common_name, ...String(row?.name_value || '').split('\n')]
+      for (const candidate of candidates) {
+        const name = String(candidate || '')
+          .trim()
+          .toLowerCase()
+          .replace(/^\*\./, '')
+          .replace(/\.$/, '')
+        if (!name || name === host) continue
+        if (!name.endsWith(`.${host}`)) continue
+        if (!/^(?:[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(name)) continue
+        names.add(name)
+      }
+    }
+
+    const all = [...names].sort(
+      (a, b) => a.split('.').length - b.split('.').length || a.localeCompare(b),
+    )
+    const payload = {
+      host,
+      total: all.length,
+      subdomains: all.slice(0, SUB_MAX),
+      truncated: all.length > SUB_MAX,
+    }
+    subCache.set(host, { at: Date.now(), payload })
+    res.setHeader('Cache-Control', 'no-store')
+    res.json(payload)
+  } catch (err) {
+    const message =
+      err?.name === 'AbortError'
+        ? 'crt.sh не ответил за 15 с'
+        : err?.message || 'неизвестная ошибка'
+    res.status(502).json({
+      error: `Не удалось получить поддомены: ${message}. TLS SAN из скана всё равно показан в инспекторе.`,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
 })
 
 /* ------------------------------------------------------------------ */

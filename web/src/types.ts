@@ -67,6 +67,14 @@ export interface HttpInfo {
   contentType?: string | null
   title?: string | null
   headers?: Record<string, string>
+  /** Cookie *names* only — values are never collected. */
+  cookies?: string[]
+  /** <meta name="generator"> value. */
+  generator?: string | null
+  /** Truncated markup sample used for local stack detection. Not exported. */
+  bodySample?: string
+  /** Technology names supplied by an imported httpx report. */
+  tech?: string[]
 }
 
 export interface IpEntry {
@@ -142,6 +150,8 @@ export interface ScanState {
   startedAt: number | null
   stats: ScanStats | null
   portOrder: number[]
+  /** Findings imported from external tools (nuclei) rather than derived. */
+  extraFindings: BasicFinding[]
 }
 
 export const emptyDns = (): DnsRecords => ({
@@ -168,6 +178,7 @@ export const initialState: ScanState = {
   startedAt: null,
   stats: null,
   portOrder: [],
+  extraFindings: [],
 }
 
 /* ------------------------------------------------------------------ */
@@ -178,11 +189,49 @@ export type Selection =
   | { kind: 'core' }
   | { kind: 'ip'; ip: string }
   | { kind: 'port'; ip: string; port: number; protocol?: Protocol }
+  | { kind: 'link'; ip: string }
   | { kind: 'ns'; index: number }
   | { kind: 'mx'; index: number }
   | { kind: 'hop'; index: number }
   | { kind: 'you' }
   | null
+
+export type TechCategory =
+  | 'cms'
+  | 'framework'
+  | 'server'
+  | 'cdn'
+  | 'analytics'
+  | 'security'
+  | 'ecommerce'
+  | 'language'
+  | 'other'
+
+export interface TechHit {
+  name: string
+  category: TechCategory
+  version?: string
+  /** Where the hit came from: header, cookie, markup or imported report. */
+  evidence?: string
+}
+
+export interface PacketTrace {
+  label: string
+  request?: string
+  response?: string
+  note?: string
+}
+
+export interface SubdomainInfo {
+  name: string
+  /** true when the name was confirmed by the certificate SANs of this scan. */
+  fromCertificate?: boolean
+}
+
+export interface SubdomainState {
+  status: 'idle' | 'loading' | 'ok' | 'error'
+  message: string
+}
 
 export interface SelectionCve {
   id: string
@@ -223,6 +272,8 @@ export interface SelectionDetails {
   block?: { title: string; rows: { label: string; value: string }[] }
   cves?: SelectionCve[]
   findings?: BasicFinding[]
+  tech?: TechHit[]
+  packet?: PacketTrace
 }
 
 /* ------------------------------------------------------------------ */
@@ -284,6 +335,7 @@ export type ScanEvent =
   | { type: 'http'; ip: string; port: number } & HttpInfo
   | { type: 'hop'; index: number; ip: string | null; rtt: number | null; timeout?: boolean }
   | { type: 'rdap'; rdap: RdapInfo }
+  | { type: 'finding'; finding: BasicFinding }
   | { type: 'log'; level: LogEntry['level']; message: string }
   | { type: 'fatal'; message: string }
   | { type: 'done'; stats: ScanStats }

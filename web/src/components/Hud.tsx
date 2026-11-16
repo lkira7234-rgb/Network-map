@@ -1,13 +1,17 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { ScanEvent, ScanState, Selection } from '../types'
+import { ScanEvent, ScanState, Selection, SubdomainInfo, SubdomainState } from '../types'
 import { Probe } from './Probe'
 import { getSelectionDetails, objectSummary, portCounts } from '../model'
 import { RateLimitInfo } from '../api'
 import { DEFAULT_FORM, PORT_PRESETS, ScanFormValues, formToUrl } from '../form'
 import { buildHtmlReport, buildReport, downloadText, printHtmlReport, reportFileName } from '../report'
-import { parseNmapXml, plural } from '../nmap'
+import { plural } from '../nmap'
+import { parseImport } from '../importers'
 import { Severity, collectCves, severityColor, severityLabel } from '../cve'
 import { collectFindings, findingColor, findingLabel } from '../checks'
+import { techCategoryLabel, techColor } from '../tech'
+import { ClusterMode } from '../layout'
+import { HistoryResult, formatSnapshotTime, hasDiff } from '../history'
 
 interface HudProps {
   model: ScanState
@@ -17,6 +21,17 @@ interface HudProps {
   hover: string | null
   mode: 'orbit' | 'fly'
   scanning: boolean
+  cluster: ClusterMode
+  subdomains: SubdomainInfo[]
+  subState: SubdomainState
+  focusIps: string[]
+  history: HistoryResult | null
+  onCluster: (mode: ClusterMode) => void
+  onFindSubdomains: () => void
+  onScanSubdomain: (name: string) => void
+  onClearFocus: () => void
+  onOpenSpotlight: () => void
+  onClearHistory: () => void
   onSelect: (selection: Selection) => void
   onScan: (values: ScanFormValues) => void
   onImport: (events: ScanEvent[], target: string) => void
@@ -55,6 +70,17 @@ export function Hud({
   hover,
   mode,
   scanning,
+  cluster,
+  subdomains,
+  subState,
+  focusIps,
+  history,
+  onCluster,
+  onFindSubdomains,
+  onScanSubdomain,
+  onClearFocus,
+  onOpenSpotlight,
+  onClearHistory,
   onSelect,
   onScan,
   onImport,
@@ -86,7 +112,11 @@ export function Hud({
   const summary = objectSummary(model)
   const counts = portCounts(model)
   const cves = useMemo(() => collectCves(model), [model.ips])
-  const findings = useMemo(() => collectFindings(model), [model.ips, model.host, model.target])
+  const findings = useMemo(
+    () => collectFindings(model),
+    [model.ips, model.extraFindings, model.host, model.target],
+  )
+  const diff = history?.diff ?? null
   const primary = model.ips.find((ip) => ip.primary) || model.ips[0]
   const hasReport =
     model.phase !== 'idle' &&
@@ -113,6 +143,11 @@ export function Hud({
     const el = logRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [model.logs.length])
+
+  // Subdomain scans and shared links change the target from the outside.
+  useEffect(() => {
+    if (model.target) setTarget(model.target)
+  }, [model.target])
 
   // Mobile: reveal the inspector as soon as a node is tapped.
   useEffect(() => {
@@ -205,18 +240,16 @@ export function Hud({
       setImportState({ status: 'error', message: 'Файл больше 32 МБ — отфильтруй отчёт.' })
       return
     }
-    setImportState({ status: 'busy', message: 'Читаю XML…' })
+    setImportState({ status: 'busy', message: 'Читаю файл…' })
     try {
-      const result = parseNmapXml(await file.text())
+      const result = parseImport(await file.text())
       onImport(result.events, result.target)
       setTarget(result.target)
-      setImportState({
-        status: 'ok',
-        message: `${result.scanner.toUpperCase()} · ${plural(result.hosts, ['хост', 'хоста', 'хостов'])} · ${plural(
-          result.ports,
-          ['порт', 'порта', 'портов'],
-        )}${result.udpPorts ? ` · UDP ${result.udpPorts}` : ''}`,
-      })
+      const parts = [result.kind.toUpperCase()]
+      if (result.hosts) parts.push(plural(result.hosts, ['хост', 'хоста', 'хостов']))
+      if (result.ports) parts.push(plural(result.ports, ['порт', 'порта', 'портов']))
+      if (result.findings) parts.push(plural(result.findings, ['находка', 'находки', 'находок']))
+      setImportState({ status: 'ok', message: parts.join(' · ') })
       setSheetOpen(false)
     } catch (error) {
       setImportState({
@@ -377,15 +410,15 @@ export function Hud({
               type="button"
               className="chip import-chip"
               onClick={() => fileRef.current?.click()}
-              title="Загрузить XML от Nmap или Masscan и показать его на карте"
+              title="Nmap/Masscan XML, httpx -json, nuclei -jsonl"
             >
-              ↥ NMAP / MASSCAN XML
+              ↥ XML · HTTPX · NUCLEI
             </button>
             <input
               ref={fileRef}
               type="file"
               className="import-file"
-              accept=".xml,text/xml,application/xml"
+              accept=".xml,.json,.jsonl,text/xml,application/xml,application/json,application/x-ndjson"
               onChange={(event) => {
                 const file = event.target.files?.[0]
                 // Reset so picking the same file twice still fires onChange.
@@ -393,6 +426,19 @@ export function Hud({
                 void importFile(file)
               }}
             />
+          </div>
+
+          <div className="search-row">
+            <button
+              type="button"
+              className="chip search-chip"
+              onClick={onOpenSpotlight}
+              disabled={model.ips.length === 0 && model.hops.length === 0 && model.dns.ns.length === 0}
+              title="Поиск по IP, портам, сервисам, CVE и находкам"
+            >
+              ⌕ SPOTLIGHT <kbd>CTRL K</kbd>
+            </button>
+            <span className="search-hint">фильтр графа</span>
           </div>
 
           {importState.status !== 'idle' && (
@@ -477,6 +523,75 @@ export function Hud({
 
         <Probe model={model} />
 
+        <section className="panel subdomains">
+          <div className="panel-head">
+            <span>06 / SUBDOMAINS</span>
+            <span className="subdomain-count">
+              {subdomains.length > 0 ? subdomains.length : 'CT'}
+            </span>
+          </div>
+
+          <div className="subdomain-actions">
+            <button
+              type="button"
+              className="btn ghost small"
+              onClick={onFindSubdomains}
+              disabled={subState.status === 'loading' || !model.host}
+              title="Certificate Transparency через crt.sh"
+            >
+              {subState.status === 'loading' ? (
+                <>
+                  <span className="spinner" /> ИЩУ…
+                </>
+              ) : subdomains.length ? (
+                <>⟳ ОБНОВИТЬ CT</>
+              ) : (
+                <>⌕ НАЙТИ ПОДДОМЕНЫ</>
+              )}
+            </button>
+            <span className="subdomain-source">crt.sh · TLS SAN</span>
+          </div>
+
+          {subState.status !== 'idle' && (
+            <p
+              className={`import-note ${
+                subState.status === 'ok' ? 'ok' : subState.status === 'error' ? 'error' : 'busy'
+              }`}
+            >
+              {subState.status === 'loading' ? <span className="spinner" /> : null}
+              {subState.message}
+            </p>
+          )}
+
+          {subdomains.length > 0 && (
+            <div className="subdomain-list">
+              {subdomains.slice(0, 60).map((item) => (
+                <button
+                  type="button"
+                  className={`subdomain-chip ${item.fromCertificate ? 'cert' : ''}`}
+                  key={item.name}
+                  onClick={() => onScanSubdomain(item.name)}
+                  title={`Сканировать ${item.name} с текущими портами`}
+                >
+                  <span>{item.name}</span>
+                  {item.fromCertificate ? <i>CT</i> : null}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {subdomains.length > 60 && (
+            <p className="subdomain-more">
+              +{subdomains.length - 60} ещё в файле CT — уточни домен или выбери имя в сцене.
+            </p>
+          )}
+
+          <p className="subdomain-note">
+            Имена из Certificate Transparency. Клик по имени — быстрый скан с текущими портами.
+            Для IP доступен только TLS SAN в инспекторе.
+          </p>
+        </section>
+
         {model.error && (
           <div className="panel error-panel" ref={errorRef}>
             <div className="panel-head">
@@ -511,6 +626,33 @@ export function Hud({
                 </div>
               ))}
             </div>
+
+            {details.tech && details.tech.length > 0 && (
+              <div className="inspector-block tech-block">
+                <h4 style={{ color: '#38f6ff' }}>СТЕК ТЕХНОЛОГИЙ</h4>
+                <div className="tech-badges">
+                  {details.tech.map((hit) => (
+                    <span
+                      className="tech-badge"
+                      key={`${hit.name}-${hit.category}`}
+                      style={{
+                        color: techColor[hit.category],
+                        borderColor: `${techColor[hit.category]}55`,
+                        background: `${techColor[hit.category]}12`,
+                      }}
+                      title={`${techCategoryLabel[hit.category]} · источник: ${hit.evidence || '—'}`}
+                    >
+                      {hit.name}
+                      {hit.version ? <> <b>{hit.version}</b></> : null}
+                    </span>
+                  ))}
+                </div>
+                <p className="tech-note">
+                  Определено локально по заголовкам, именам cookie, meta generator и HTML. Без
+                  активных запросов.
+                </p>
+              </div>
+            )}
 
             {details.block && (
               <div className="inspector-block">
@@ -581,29 +723,52 @@ export function Hud({
                 </p>
               </div>
             )}
+
+            {details.packet && (
+              <div className="inspector-block packet-block">
+                <h4 style={{ color: '#38f6ff' }}>PACKET · {details.packet.label}</h4>
+                {details.packet.request && (
+                  <>
+                    <span className="packet-label">ЗАПРОС</span>
+                    <pre className="packet-pre">{details.packet.request}</pre>
+                  </>
+                )}
+                {details.packet.response && (
+                  <>
+                    <span className="packet-label">ОТВЕТ</span>
+                    <pre className="packet-pre response">{details.packet.response}</pre>
+                  </>
+                )}
+                {details.packet.note && <p className="packet-note">{details.packet.note}</p>}
+              </div>
+            )}
           </section>
         )}
       </aside>
 
       <aside className="right-col">
-        {summary && model.phase !== 'idle' && (
+        {(summary || findings.length > 0) && model.phase !== 'idle' && (
           <section className="panel summary">
             <div className="panel-head">
-              <span>04 / OBJECT SUMMARY</span>
-              <span
-                className={`hygiene-score ${
-                  summary.hygieneOk === summary.hygiene.length
-                    ? 'ok'
-                    : summary.hygieneOk >= 3
-                      ? 'warn'
-                      : 'bad'
-                }`}
-                title="Присутствие заголовков безопасности HTTP"
-              >
-                {summary.hygieneOk}/{summary.hygiene.length}
-              </span>
+              <span>{summary ? '04 / OBJECT SUMMARY' : '04 / FINDINGS'}</span>
+              {summary && (
+                <span
+                  className={`hygiene-score ${
+                    summary.hygieneOk === summary.hygiene.length
+                      ? 'ok'
+                      : summary.hygieneOk >= 3
+                        ? 'warn'
+                        : 'bad'
+                  }`}
+                  title="Присутствие заголовков безопасности HTTP"
+                >
+                  {summary.hygieneOk}/{summary.hygiene.length}
+                </span>
+              )}
             </div>
 
+            {summary && (
+              <>
             <div className="summary-grid">
               {summary.providers.map((item) => (
                 <div className="summary-item" key={item.label}>
@@ -643,6 +808,8 @@ export function Hud({
                 </span>
               ))}
             </div>
+              </>
+            )}
 
             {cves.length > 0 && (
               <div className="cve-block">
@@ -694,6 +861,130 @@ export function Hud({
           </section>
         )}
 
+        <section className="panel history">
+          <div className="panel-head">
+            <span>08 / HISTORY · DIFF</span>
+            {history && (
+              <button type="button" className="link-btn" onClick={onClearHistory} title="Удалить историю сканов из браузера">
+                ОЧИСТИТЬ
+              </button>
+            )}
+          </div>
+
+          {!history && (
+            <p className="history-empty">
+              История хранится локально в IndexedDB (последние 20 сканов). Сделай повторный скан
+              того же домена — покажу новые и закрывшиеся порты.
+            </p>
+          )}
+
+          {history && (
+            <>
+              <div className="history-meta">
+                <span>{formatSnapshotTime(history.snapshot.at)}</span>
+                <b>
+                  {history.snapshot.counts.ips} IP · {history.snapshot.counts.open} откр.
+                </b>
+                <em>скан #{history.total}</em>
+              </div>
+
+              {!diff && (
+                <p className="history-empty">
+                  Это первый скан {history.snapshot.host} в этом браузере — сравнивать пока не с
+                  чем.
+                </p>
+              )}
+
+              {diff && !hasDiff(diff) && (
+                <p className="diff-clean">
+                  ✓ Изменений нет · {diff.unchanged} открытых портов без изменений
+                </p>
+              )}
+
+              {diff && hasDiff(diff) && (
+                <div className="diff-grid">
+                  {diff.newPorts.length > 0 && (
+                    <div className="diff-group new">
+                      <h5>НОВЫЕ ПОРТЫ · {diff.newPorts.length}</h5>
+                      {diff.newPorts.slice(0, 10).map((port) => (
+                        <span className="diff-item" key={`new-${port.ip}-${port.protocol}-${port.port}`}>
+                          {port.ip}:{port.port}
+                          {port.protocol === 'udp' ? '/u' : ''} · {port.service}
+                        </span>
+                      ))}
+                      {diff.newPorts.length > 10 && (
+                        <span className="diff-more">+{diff.newPorts.length - 10} ещё</span>
+                      )}
+                    </div>
+                  )}
+
+                  {diff.closedPorts.length > 0 && (
+                    <div className="diff-group closed">
+                      <h5>ЗАКРЫЛИСЬ · {diff.closedPorts.length}</h5>
+                      {diff.closedPorts.slice(0, 10).map((port) => (
+                        <span className="diff-item" key={`old-${port.ip}-${port.protocol}-${port.port}`}>
+                          {port.ip}:{port.port}
+                          {port.protocol === 'udp' ? '/u' : ''} · {port.service}
+                        </span>
+                      ))}
+                      {diff.closedPorts.length > 10 && (
+                        <span className="diff-more">+{diff.closedPorts.length - 10} ещё</span>
+                      )}
+                    </div>
+                  )}
+
+                  {diff.newCves.length > 0 && (
+                    <div className="diff-group cve">
+                      <h5>НОВЫЕ CVE · {diff.newCves.length}</h5>
+                      {diff.newCves.slice(0, 8).map((cve) => (
+                        <span className="diff-item" key={`cve-${cve.id}-${cve.ip}-${cve.port}`}>
+                          {cve.id} · {cve.ip}:{cve.port}
+                        </span>
+                      ))}
+                      {diff.newCves.length > 8 && (
+                        <span className="diff-more">+{diff.newCves.length - 8} ещё</span>
+                      )}
+                    </div>
+                  )}
+
+                  {diff.newFindings.length > 0 && (
+                    <div className="diff-group finding">
+                      <h5>НОВЫЕ НАХОДКИ · {diff.newFindings.length}</h5>
+                      {diff.newFindings.slice(0, 6).map((finding) => (
+                        <span className="diff-item" key={`finding-${finding.id}-${finding.ip}-${finding.port ?? ''}`}>
+                          {finding.title} · {finding.ip}
+                          {finding.port ? `:${finding.port}` : ''}
+                        </span>
+                      ))}
+                      {diff.newFindings.length > 6 && (
+                        <span className="diff-more">+{diff.newFindings.length - 6} ещё</span>
+                      )}
+                    </div>
+                  )}
+
+                  {(diff.goneCves.length > 0 || diff.goneFindings.length > 0) && (
+                    <div className="diff-group gone">
+                      <h5>УШЛИ · {diff.goneCves.length + diff.goneFindings.length}</h5>
+                      {diff.goneCves.slice(0, 4).map((cve) => (
+                        <span className="diff-item" key={`gone-cve-${cve.id}-${cve.ip}-${cve.port}`}>
+                          {cve.id} · {cve.ip}:{cve.port}
+                        </span>
+                      ))}
+                      {diff.goneFindings.slice(0, 4).map((finding) => (
+                        <span className="diff-item" key={`gone-finding-${finding.id}-${finding.ip}-${finding.port ?? ''}`}>
+                          {finding.title} · {finding.ip}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <span className="diff-unchanged">{diff.unchanged} портов без изменений</span>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+
         <section className={`panel telemetry phase-${model.phase}`}>
           <div className="panel-head">
             <span>02 / TELEMETRY</span>
@@ -732,6 +1023,30 @@ export function Hud({
             <span className="dns-chip ns">NS <b>{model.dns.ns.length}</b></span>
             <span className="dns-chip mx">MX <b>{model.dns.mx.length}</b></span>
             <span className="dns-chip">TXT <b>{model.dns.txt.length}</b></span>
+          </div>
+
+          <div className="cluster-row">
+            <span className="quick-label">КЛАСТЕРЫ:</span>
+            {(
+              [
+                ['none', 'ВЫКЛ', 'Без группировки'],
+                ['subnet', '/24', 'Группировать по подсети /24 (IPv6 — /64)'],
+                ['asn', 'ASN', 'Группировать по автономной системе из GEO/ASN'],
+              ] as [ClusterMode, string, string][]
+            ).map(([value, label, hint]) => (
+              <button
+                key={value}
+                type="button"
+                className={`chip ${cluster === value ? 'active' : ''}`}
+                onClick={() => onCluster(value)}
+                title={hint}
+              >
+                {label}
+              </button>
+            ))}
+            {model.ips.length > 0 && model.ips.length < 3 && (
+              <span className="cluster-hint">нужно 3+ узла</span>
+            )}
           </div>
 
           {model.dns.cname.length > 0 && (
@@ -780,10 +1095,22 @@ export function Hud({
         </div>
       )}
 
+      {focusIps.length > 0 && (
+        <div className="focus-banner">
+          <span>⌕ ФОКУС: {focusIps.length} узл. · остальные притушены</span>
+          <button type="button" onClick={onClearFocus}>
+            ✕ СБРОС
+          </button>
+        </div>
+      )}
+
       <div className="bottom-bar">
         <div className="mode-group">
           <button type="button" className={`mode-btn ${mode === 'fly' ? 'active' : ''}`} onClick={onToggleMode}>
             {mode === 'fly' ? '✈ ПОЛЁТ АКТИВЕН' : '✈ СВОБОДНЫЙ ПОЛЁТ'}
+          </button>
+          <button type="button" className="mode-btn" onClick={onOpenSpotlight}>
+            ⌕ ПОИСК
           </button>
           <button type="button" className="mode-btn" onClick={onResetCamera}>
             ⟲ СБРОС
@@ -843,6 +1170,7 @@ export function Hud({
         <span><i className="dot closed" />CLOSED</span>
         <span><i className="dot ns" />DNS</span>
         <span><i className="dot hop" />HOP</span>
+        {subdomains.length > 0 && <span><i className="dot sub" />CT</span>}
       </div>
 
       <div className="reticle">
