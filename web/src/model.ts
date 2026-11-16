@@ -10,6 +10,7 @@ import {
   ScanEvent,
   ScanState,
   Selection,
+  SelectionAction,
   SelectionDetails,
   SummaryCert,
   SummaryFlag,
@@ -571,6 +572,72 @@ export function objectSummary(state: ScanState): ObjectSummary | null {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/*  direct connect shortcuts                                           */
+/* ------------------------------------------------------------------ */
+
+const ipLiteral = (value: string) => /^[0-9.]+$/.test(value) || value.includes(':')
+
+function webAddress(state: ScanState, ip: string, port: number): string {
+  // Prefer the scanned hostname so virtual hosts serve the right site, but fall
+  // back to the literal address when the target itself is an IP.
+  const host = state.host && !ipLiteral(state.host) ? state.host : ip
+  const secure = port === 443 || port === 8443
+  const suffix = secure ? (port === 443 ? '' : `:${port}`) : port === 80 ? '' : `:${port}`
+  return `${secure ? 'https' : 'http'}://${host}${suffix}/`
+}
+
+function rdpPayload(host: string, port: number): string {
+  return [
+    `full address:s:${host}:${port}`,
+    'username:s:',
+    'prompt for credentials:i:1',
+    'authentication level:i:2',
+    'screen mode id:i:2',
+    'use multimon:i:1',
+    'redirectclipboard:i:1',
+    'audiomode:i:0',
+    'autoreconnection enabled:i:1',
+    '',
+  ].join('\r\n')
+}
+
+/** Local, one-click follow-ups for an open port. Nothing is sent to a server. */
+function directActions(state: ScanState, ip: IpEntry, port: PortInfo): SelectionAction[] {
+  if (port.state !== 'open' || port.protocol === 'udp') return []
+  const host = state.host && !ipLiteral(state.host) ? state.host : ip.ip
+  if (port.port === 80 || port.port === 443) {
+    const url = webAddress(state, ip.ip, port.port)
+    return [
+      { id: 'browser', label: 'ОТКРЫТЬ В БРАУЗЕРЕ', kind: 'open', value: url, hint: url },
+      {
+        id: 'burp',
+        label: 'ОТКРЫТЬ В BURP',
+        kind: 'copy',
+        value: url,
+        hint: 'Скопировать URL и вставить в Burp Repeater (Ctrl+R)',
+      },
+    ]
+  }
+  if (port.port === 22) {
+    const command = `ssh user@${host}`
+    return [{ id: 'ssh', label: 'КОПИРОВАТЬ SSH', kind: 'copy', value: command, hint: command }]
+  }
+  if (port.port === 3389) {
+    return [
+      {
+        id: 'rdp',
+        label: 'СКАЧАТЬ .RDP',
+        kind: 'download',
+        value: rdpPayload(host, port.port),
+        filename: `${host.replace(/[\\/:*?"<>|]/g, '-')}-${port.port}.rdp`,
+        hint: 'Файл подключения Remote Desktop',
+      },
+    ]
+  }
+  return []
+}
+
 export function getSelectionDetails(state: ScanState, selection: Selection): SelectionDetails | null {
   if (!selection) return null
   const primary = primaryIp(state)
@@ -733,6 +800,7 @@ export function getSelectionDetails(state: ScanState, selection: Selection): Sel
         ? techForHttp(httpEntries(ip).find((entry) => entry.port === port.port)!)
         : undefined,
       packet: packetFor(ip, state.host || state.target || '', port),
+      actions: directActions(state, ip, port),
     }
   }
 

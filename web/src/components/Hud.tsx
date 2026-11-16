@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { ScanEvent, ScanState, Selection, SubdomainInfo, SubdomainState } from '../types'
+import { ScanEvent, ScanState, Selection, SelectionAction, SubdomainInfo, SubdomainState } from '../types'
 import { Probe } from './Probe'
 import { getSelectionDetails, objectSummary, portCounts } from '../model'
 import { RateLimitInfo } from '../api'
@@ -98,6 +98,7 @@ export function Hud({
   const [mobileTab, setMobileTab] = useState<'scan' | 'telemetry' | 'inspect'>('scan')
   const [sheetOpen, setSheetOpen] = useState(true)
   const [shareState, setShareState] = useState<'idle' | 'copied' | 'error'>('idle')
+  const [actionNote, setActionNote] = useState<{ id: string; message: string } | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
   const [importState, setImportState] = useState<{
     status: 'idle' | 'busy' | 'ok' | 'error'
@@ -108,6 +109,7 @@ export function Hud({
   const errorRef = useRef<HTMLDivElement>(null)
   const reportRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const actionTimer = useRef<number | null>(null)
   const details = getSelectionDetails(model, selection)
   const summary = objectSummary(model)
   const counts = portCounts(model)
@@ -223,6 +225,57 @@ export function Hud({
       if ((error as Error)?.name === 'AbortError') return
       setShareState('error')
     }
+  }
+
+  const flashAction = (id: string, message: string) => {
+    setActionNote({ id, message })
+    if (actionTimer.current != null) window.clearTimeout(actionTimer.current)
+    actionTimer.current = window.setTimeout(() => setActionNote(null), 3600)
+  }
+
+  const copyValue = async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      return true
+    } catch {
+      // Clipboard API needs a secure context; fall back for plain http hosts.
+    }
+    try {
+      const area = document.createElement('textarea')
+      area.value = value
+      area.setAttribute('readonly', '')
+      area.style.position = 'fixed'
+      area.style.opacity = '0'
+      document.body.appendChild(area)
+      area.select()
+      const ok = document.execCommand('copy')
+      document.body.removeChild(area)
+      return ok
+    } catch {
+      return false
+    }
+  }
+
+  const runAction = async (action: SelectionAction) => {
+    if (action.kind === 'open') {
+      window.open(action.value, '_blank', 'noopener,noreferrer')
+      flashAction(action.id, `Открываю ${action.value}`)
+      return
+    }
+    if (action.kind === 'download') {
+      downloadText(action.filename || 'connection.rdp', 'application/x-rdp', action.value)
+      flashAction(action.id, `Скачиваю ${action.filename || 'connection.rdp'}`)
+      return
+    }
+    const ok = await copyValue(action.value)
+    flashAction(
+      action.id,
+      ok
+        ? action.id === 'burp'
+          ? 'URL скопирован — вставь в Burp Repeater (Ctrl+R)'
+          : `Скопировано: ${action.value}`
+        : 'Браузер не дал доступ к буферу обмена',
+    )
   }
 
   const submit = (event: FormEvent) => {
@@ -626,6 +679,37 @@ export function Hud({
                 </div>
               ))}
             </div>
+
+            {details.actions && details.actions.length > 0 && (
+              <div className="inspector-block quick-actions">
+                <h4 style={{ color: '#49ff9e' }}>DIRECT CONNECT</h4>
+                <div className="quick-action-row">
+                  {details.actions.map((action) => (
+                    <button
+                      key={action.id}
+                      type="button"
+                      className={`quick-action ${action.id}`}
+                      onClick={() => void runAction(action)}
+                      title={action.hint || action.value}
+                    >
+                      <i>
+                        {action.kind === 'open' ? '↗' : action.kind === 'copy' ? '⧉' : '⭳'}
+                      </i>
+                      {action.label}
+                    </button>
+                  ))}
+                </div>
+                {actionNote && (
+                  <p className="quick-note" aria-live="polite">
+                    {actionNote.message}
+                  </p>
+                )}
+                <p className="quick-disclaimer">
+                  Ссылки строятся локально из данных скана. Burp получает URL через буфер обмена —
+                  вставь его в Repeater. Для SSH замени <code>user</code> на своё имя.
+                </p>
+              </div>
+            )}
 
             {details.tech && details.tech.length > 0 && (
               <div className="inspector-block tech-block">

@@ -262,6 +262,20 @@ export interface BasicFinding {
   protocol?: Protocol
 }
 
+/**
+ * A one-click follow-up for an open port: open in a new tab, copy a command or
+ * download a file. Values are built locally from scan data, never fetched.
+ */
+export interface SelectionAction {
+  id: string
+  label: string
+  kind: 'open' | 'copy' | 'download'
+  /** URL for `open`, text for `copy`, file body for `download`. */
+  value: string
+  filename?: string
+  hint?: string
+}
+
 export interface SelectionDetails {
   eyebrow: string
   title: string
@@ -274,6 +288,7 @@ export interface SelectionDetails {
   findings?: BasicFinding[]
   tech?: TechHit[]
   packet?: PacketTrace
+  actions?: SelectionAction[]
 }
 
 /* ------------------------------------------------------------------ */

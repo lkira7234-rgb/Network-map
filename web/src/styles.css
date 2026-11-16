@@ -1846,6 +1846,107 @@ select.probe-input {
   text-transform: uppercase;
 }
 
+/* direct connect --------------------------------------------------- */
+
+.quick-actions h4 {
+  color: #49ff9e;
+}
+
+.quick-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.quick-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  color: #9df5c5;
+  background: rgba(73, 255, 158, 0.06);
+  border: 1px solid rgba(73, 255, 158, 0.24);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.quick-action i {
+  font-style: normal;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.quick-action:hover {
+  color: #04160e;
+  background: #49ff9e;
+  border-color: #9dffcb;
+  box-shadow: 0 0 16px rgba(73, 255, 158, 0.28);
+}
+
+.quick-action.burp {
+  color: #ffb0ec;
+  background: rgba(255, 47, 214, 0.07);
+  border-color: rgba(255, 47, 214, 0.28);
+}
+
+.quick-action.burp:hover {
+  color: #1c0317;
+  background: #ff7fe4;
+  border-color: #ffc2f2;
+  box-shadow: 0 0 16px rgba(255, 47, 214, 0.3);
+}
+
+.quick-action.ssh {
+  color: #b7ecff;
+  background: rgba(56, 246, 255, 0.06);
+  border-color: rgba(56, 246, 255, 0.26);
+}
+
+.quick-action.ssh:hover {
+  color: #02141a;
+  background: var(--cyan);
+  border-color: #9df6ff;
+  box-shadow: 0 0 16px rgba(56, 246, 255, 0.3);
+}
+
+.quick-action.rdp {
+  color: #ffd79a;
+  background: rgba(255, 176, 32, 0.07);
+  border-color: rgba(255, 176, 32, 0.28);
+}
+
+.quick-action.rdp:hover {
+  color: #1b1200;
+  background: var(--amber);
+  border-color: #ffd79a;
+  box-shadow: 0 0 16px rgba(255, 176, 32, 0.3);
+}
+
+.quick-note {
+  margin: 7px 0 0;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  line-height: 1.5;
+  color: #a8ffd3;
+  overflow-wrap: anywhere;
+}
+
+.quick-disclaimer {
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  line-height: 1.55;
+  color: var(--muted-2);
+}
+
+.quick-disclaimer code {
+  font-family: var(--font-mono);
+  color: #9ad8ff;
+}
+
 .icon-btn {
   display: grid;
   place-items: center;
@@ -3186,6 +3287,19 @@ select.probe-input {
   .tech-badge {
     padding: 3px 7px;
     font-size: 8.5px;
+  }
+
+  .quick-action {
+    flex: 1 1 calc(50% - 3px);
+    justify-content: center;
+    min-height: 38px;
+    padding: 9px 8px;
+    font-size: 9px;
+  }
+
+  .quick-note,
+  .quick-disclaimer {
+    font-size: 8px;
   }
 
   .diff-item {
