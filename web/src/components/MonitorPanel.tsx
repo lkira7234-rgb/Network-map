@@ -89,6 +89,22 @@ export function MonitorPanel() {
             <code>ALERT_WEBHOOK_URL=https://…</code>
             <code>ALERT_TELEGRAM_TOKEN=… · ALERT_TELEGRAM_CHAT=…</code>
           </div>
+          {status.env && (
+            <div className="monitor-env-check" title="Какие переменные видит запущенный процесс (только наличие)">
+              <span className={status.env.targets > 0 ? 'on' : ''}>
+                TARGETS {status.env.targets > 0 ? '✓' : '—'}
+              </span>
+              <span className={status.env.telegramToken ? 'on' : ''}>
+                TOKEN {status.env.telegramToken ? '✓' : '—'}
+              </span>
+              <span className={status.env.telegramChat ? 'on' : ''}>
+                CHAT {status.env.telegramChat ? '✓' : '—'}
+              </span>
+              <span className={status.env.webhook ? 'on' : ''}>
+                WEBHOOK {status.env.webhook ? '✓' : '—'}
+              </span>
+            </div>
+          )}
           <p className="subdomain-note">
             Переменные задаются в окружении сервера. Токены и URL вебхуков не вводятся в браузере и
             никогда не попадают в клиент.

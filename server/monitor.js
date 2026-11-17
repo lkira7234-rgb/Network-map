@@ -268,6 +268,14 @@ export function createMonitor(env = process.env, logger = console) {
       intervalMin,
       ports: ports.length,
       alerts: { webhook: Boolean(webhookUrl), telegram },
+      // Presence of configuration only: no values, URLs or tokens. Lets an
+      // operator see which variable the running process is missing.
+      env: {
+        targets: targets.length,
+        telegramToken: Boolean(telegramToken),
+        telegramChat: Boolean(telegramChat),
+        webhook: Boolean(webhookUrl),
+      },
       targets: [...status.values()].map((entry) => ({
         ...entry,
         added: entry.added.slice(0, 40),

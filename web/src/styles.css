@@ -2920,6 +2920,21 @@ select.probe-input {
   overflow-wrap: anywhere;
 }
 
+.monitor-env-check {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 10px;
+  margin: 6px 0 8px;
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  letter-spacing: 0.05em;
+  color: var(--muted-2);
+}
+
+.monitor-env-check .on {
+  color: var(--green);
+}
+
 .monitor-targets {
   display: flex;
   flex-direction: column;
