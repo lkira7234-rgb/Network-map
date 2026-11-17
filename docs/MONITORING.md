@@ -76,6 +76,25 @@ jobs:
 
 `MONITOR_URL` — базовый адрес сервиса, например `https://network-map-3cw5.onrender.com`.
 
+### Настройка через Render API (опционально)
+
+Если не хочется кликать в дашборде, переменные можно выставить одной командой.
+Всё читается из окружения, ничего не печатается и не сохраняется в репозиторий:
+
+```powershell
+$env:RENDER_API_KEY='rnd_...'                 # Account Settings → API Keys
+$env:ALERT_TELEGRAM_TOKEN='123456:ABC'
+$env:ALERT_TELEGRAM_CHAT='8458549640'
+$env:MONITOR_TARGETS='network-map-3cw5.onrender.com'
+$env:MONITOR_PORTS='22,80,443,6379'
+$env:MONITOR_INTERVAL_MIN='60'
+npm run render:monitor
+```
+
+Скрипт найдёт сервис по имени (или по `RENDER_SERVICE=srv-...`), запишет переменные
+и запустит деплой. API-ключ Render даёт полный доступ к аккаунту — после настройки его
+лучше отозвать.
+
 ## Как считается DIFF
 
 - Первый запуск запоминает открытые порты и ничего не присылает (это база).
