@@ -29,10 +29,20 @@ Discord или любой вебхук: какие порты открылись
 
 ## Telegram
 
-1. Создай бота у [@BotFather](https://t.me/BotFather), получи токен.
-2. Напиши боту любое сообщение, затем узнай `chat_id`:
-   `https://api.telegram.org/bot<TOKEN>/getUpdates`.
-3. Задай `ALERT_TELEGRAM_TOKEN` и `ALERT_TELEGRAM_CHAT`.
+1. Создай бота у [@BotFather](https://t.me/BotFather): `/newbot` → имя → username, получи токен.
+2. Открой бота, нажми **Start** (или отправь `/start`) — без этого Telegram не отдаст чат.
+3. Задай токен и узнай `chat_id` одной командой (токен читается из окружения и не печатается):
+
+   ```bash
+   ALERT_TELEGRAM_TOKEN=123456:ABC-DEF npm run telegram:chat-id
+   ```
+
+   Если чатов несколько (личка, группа, канал) — выбери нужный `chat_id`.
+4. На сервере задай `ALERT_TELEGRAM_TOKEN` и `ALERT_TELEGRAM_CHAT`, перезапусти сервис.
+5. Нажми «ТЕСТ УВЕДОМЛЕНИЯ» в панели `09 / PERIMETER MONITOR`.
+
+Для группы добавь бота в группу и отправь туда сообщение — `chat_id` группы отрицательный.
+Если `sendMessage` отвечает `400 chat not found`, значит бот не видел этот чат: напиши в него ещё раз.
 
 ## Render
 
