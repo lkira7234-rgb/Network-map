@@ -76,6 +76,11 @@ jobs:
 
 `MONITOR_URL` — базовый адрес сервиса, например `https://network-map-3cw5.onrender.com`.
 
+Готовый workflow уже лежит в `.github/workflows/monitor.yml` — включить его можно без правок кода:
+добавь в GitHub → Settings → Secrets and variables → Actions секреты `MONITOR_URL` и
+`MONITOR_TOKEN`, а такой же `MONITOR_TOKEN` пропиши в Environment Render. Пока секретов нет,
+job завершается без ошибок и ничего не шлёт.
+
 ### Настройка через Render API (опционально)
 
 Если не хочется кликать в дашборде, переменные можно выставить одной командой.
