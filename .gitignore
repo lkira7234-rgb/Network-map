@@ -4,3 +4,4 @@ dist/
 *.log
 .DS_Store
 .monitor-state.json
+.render-key
