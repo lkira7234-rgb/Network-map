@@ -141,6 +141,7 @@ export interface MonitorStatus {
   ports: number
   alerts: { webhook: boolean; telegram: boolean }
   env?: { targets: number; telegramToken: boolean; telegramChat: boolean; webhook: boolean }
+  issues?: string[]
   targets: MonitorTargetStatus[]
   history: MonitorChange[]
   hint?: string | null
@@ -169,6 +170,7 @@ export async function fetchMonitor(signal?: AbortSignal): Promise<MonitorStatus>
           webhook: Boolean(data.env.webhook),
         }
       : undefined,
+    issues: Array.isArray(data.issues) ? data.issues.map(String) : [],
     targets: Array.isArray(data.targets) ? data.targets : [],
     history: Array.isArray(data.history) ? data.history : [],
     hint: data.hint ?? null,

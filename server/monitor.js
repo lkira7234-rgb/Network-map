@@ -27,13 +27,39 @@ function readTargets(raw) {
   const targets = []
   for (const value of csv(raw)) {
     try {
-      targets.push(normalizeTarget(value).host)
+      targets.push(normalizeTarget(value.replace(/^["'`]+|["'`]+$/g, '')).host)
     } catch {
       // Ignore malformed entries so one typo does not disable the monitor.
     }
     if (targets.length >= MAX_TARGETS) break
   }
   return [...new Set(targets)]
+}
+
+/**
+ * Tolerant port parsing: operators paste values with quotes, spaces or a stray
+ * placeholder. Skip what cannot be parsed instead of disabling monitoring.
+ */
+function readPorts(raw) {
+  const source = String(raw ?? '').trim()
+  const tokens = (source || DEFAULT_PORTS)
+    .split(/[\s,;]+/)
+    .map((item) => item.replace(/^["'`]+|["'`]+$/g, '').trim())
+    .filter(Boolean)
+  const ports = new Set()
+  const invalid = []
+  for (const token of tokens) {
+    try {
+      for (const port of parsePorts(token)) {
+        ports.add(port)
+        if (ports.size >= MAX_PORTS) break
+      }
+    } catch {
+      invalid.push(token)
+    }
+    if (ports.size >= MAX_PORTS) break
+  }
+  return { ports: [...ports].sort((a, b) => a - b).slice(0, MAX_PORTS), invalid }
 }
 
 function shortPort(key, labels) {
@@ -63,13 +89,7 @@ async function postJson(url, body, timeoutMs = 8000) {
 
 export function createMonitor(env = process.env, logger = console) {
   const targets = readTargets(env.MONITOR_TARGETS)
-  let ports = []
-  try {
-    ports = parsePorts(env.MONITOR_PORTS || DEFAULT_PORTS).slice(0, MAX_PORTS)
-  } catch {
-    // A typo in MONITOR_PORTS must not crash the server; monitoring just stays off.
-    ports = []
-  }
+  const { ports, invalid: invalidPorts } = readPorts(env.MONITOR_PORTS)
   const intervalMin = Math.max(
     MIN_INTERVAL_MIN,
     Number(env.MONITOR_INTERVAL_MIN) || 60,
@@ -83,6 +103,13 @@ export function createMonitor(env = process.env, logger = console) {
 
   const enabled = targets.length > 0 && ports.length > 0
   const telegram = Boolean(telegramToken && telegramChat)
+
+  const issues = []
+  if (!targets.length) issues.push('MONITOR_TARGETS не задан или не распознан')
+  if (!ports.length) issues.push('MONITOR_PORTS пуст или некорректен — пример: 22,80,443,6379')
+  else if (invalidPorts.length) {
+    issues.push(`MONITOR_PORTS: пропущено некорректных значений — ${invalidPorts.length}`)
+  }
 
   /** @type {Map<string, { at: number, open: string[], labels: Record<string, string> }>} */
   const snapshots = new Map()
@@ -276,6 +303,7 @@ export function createMonitor(env = process.env, logger = console) {
         telegramChat: Boolean(telegramChat),
         webhook: Boolean(webhookUrl),
       },
+      issues,
       targets: [...status.values()].map((entry) => ({
         ...entry,
         added: entry.added.slice(0, 40),

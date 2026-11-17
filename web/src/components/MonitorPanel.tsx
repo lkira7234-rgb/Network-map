@@ -89,6 +89,13 @@ export function MonitorPanel() {
             <code>ALERT_WEBHOOK_URL=https://…</code>
             <code>ALERT_TELEGRAM_TOKEN=… · ALERT_TELEGRAM_CHAT=…</code>
           </div>
+          {status.issues && status.issues.length > 0 && (
+            <ul className="monitor-issues">
+              {status.issues.map((issue) => (
+                <li key={issue}>{issue}</li>
+              ))}
+            </ul>
+          )}
           {status.env && (
             <div className="monitor-env-check" title="Какие переменные видит запущенный процесс (только наличие)">
               <span className={status.env.targets > 0 ? 'on' : ''}>
