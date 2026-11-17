@@ -243,13 +243,20 @@ app.post('/api/monitor/test', async (req, res) => {
     res.status(429).json({ error: `Тест уже отправлялся. Повтори через ${retryAfter} с.`, retryAfter })
     return
   }
-  const sent = await monitor.sendTest()
-  if (!sent) {
-    res.status(400).json({ error: 'Вебхук или Telegram не настроены в окружении сервера.' })
+  const result = await monitor.sendTest()
+  if (!result.sent) {
+    const reason =
+      result.results
+        .filter((item) => !item.ok)
+        .map((item) => `${item.channel}: ${item.error}`)
+        .join('; ') ||
+      result.error ||
+      'каналы не настроены'
+    res.status(502).json({ error: `Не удалось отправить уведомление — ${reason}` })
     return
   }
   lastMonitorTest = now
-  res.json({ ok: true })
+  res.json({ ok: true, channels: result.results.filter((item) => item.ok).map((item) => item.channel) })
 })
 
 // External cron hook (e.g. GitHub Actions) for hosts that sleep when idle.

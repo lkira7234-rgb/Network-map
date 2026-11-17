@@ -155,12 +155,16 @@ export function createMonitor(env = process.env, logger = console) {
 
   async function deliver(text) {
     const jobs = []
+    const results = []
     if (webhookUrl) {
       // `content` is read by Discord, `text` by Slack and most generic hooks.
       jobs.push(
-        postJson(webhookUrl, { content: text, text, message: text }).catch((error) => {
-          logger.warn(`[monitor] webhook failed: ${error.message}`)
-        }),
+        postJson(webhookUrl, { content: text, text, message: text })
+          .then(() => results.push({ channel: 'webhook', ok: true }))
+          .catch((error) => {
+            logger.warn(`[monitor] webhook failed: ${error.message}`)
+            results.push({ channel: 'webhook', ok: false, error: error.message })
+          }),
       )
     }
     if (telegram) {
@@ -169,12 +173,16 @@ export function createMonitor(env = process.env, logger = console) {
           chat_id: telegramChat,
           text,
           disable_web_page_preview: true,
-        }).catch((error) => {
-          logger.warn(`[monitor] telegram failed: ${error.message}`)
-        }),
+        })
+          .then(() => results.push({ channel: 'telegram', ok: true }))
+          .catch((error) => {
+            logger.warn(`[monitor] telegram failed: ${error.message}`)
+            results.push({ channel: 'telegram', ok: false, error: error.message })
+          }),
       )
     }
     await Promise.all(jobs)
+    return results
   }
 
   async function scanTarget(target) {
@@ -314,11 +322,13 @@ export function createMonitor(env = process.env, logger = console) {
   }
 
   async function sendTest() {
-    if (!webhookUrl && !telegram) return false
-    await deliver(
+    if (!webhookUrl && !telegram) {
+      return { sent: false, results: [], error: 'вебхук и Telegram не настроены' }
+    }
+    const results = await deliver(
       `\u2705 NETWORK//MAP \u00b7 тестовое уведомление\nЦель: ${targets[0] || '—'} · портов: ${ports.length} · интервал: ${intervalMin} мин`,
     )
-    return true
+    return { sent: results.some((result) => result.ok), results }
   }
 
   return {
