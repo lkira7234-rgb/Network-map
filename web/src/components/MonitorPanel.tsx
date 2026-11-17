@@ -1,0 +1,175 @@
+import { useEffect, useRef, useState } from 'react'
+import { MonitorStatus, fetchMonitor, testMonitorAlert } from '../api'
+
+const timeOf = (value: number | null) => {
+  if (!value) return '—'
+  const date = new Date(value)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+/**
+ * Server-side perimeter monitor status. Webhook URLs and bot tokens live in
+ * the operator's environment and are never sent to the browser.
+ */
+export function MonitorPanel() {
+  const [status, setStatus] = useState<MonitorStatus | null>(null)
+  const [error, setError] = useState('')
+  const [test, setTest] = useState<{ status: 'idle' | 'busy' | 'ok' | 'error'; message: string }>({
+    status: 'idle',
+    message: '',
+  })
+  const alive = useRef(true)
+
+  useEffect(() => {
+    alive.current = true
+    const controller = new AbortController()
+
+    const load = async () => {
+      try {
+        const data = await fetchMonitor(controller.signal)
+        if (alive.current) {
+          setStatus(data)
+          setError('')
+        }
+      } catch (err) {
+        if ((err as Error)?.name === 'AbortError') return
+        if (alive.current) setError((err as Error)?.message || 'Мониторинг недоступен')
+      }
+    }
+
+    void load()
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void load()
+    }, 60_000)
+
+    return () => {
+      alive.current = false
+      controller.abort()
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  const runTest = async () => {
+    setTest({ status: 'busy', message: 'Отправляю…' })
+    try {
+      await testMonitorAlert()
+      setTest({ status: 'ok', message: 'Уведомление отправлено' })
+    } catch (err) {
+      setTest({ status: 'error', message: (err as Error)?.message || 'Не удалось отправить' })
+    }
+  }
+
+  const enabled = Boolean(status?.enabled)
+  const channels = [status?.alerts.webhook ? 'WEBHOOK' : '', status?.alerts.telegram ? 'TELEGRAM' : '']
+    .filter(Boolean)
+    .join(' · ')
+
+  return (
+    <section className="panel monitor">
+      <div className="panel-head">
+        <span>09 / PERIMETER MONITOR</span>
+        <span className={`monitor-state ${enabled ? 'on' : 'off'}`}>
+          <i /> {enabled ? 'ON' : 'OFF'}
+        </span>
+      </div>
+
+      {error && <p className="import-note error">{error}</p>}
+
+      {!status && !error && <p className="history-empty">Читаю состояние монитора…</p>}
+
+      {status && !enabled && (
+        <>
+          <p className="history-empty">
+            Серверный мониторинг выключен. Он работает без открытой вкладки и присылает DIFF в
+            Telegram, Discord или любой вебхук.
+          </p>
+          <div className="monitor-env">
+            <code>MONITOR_TARGETS=example.com</code>
+            <code>MONITOR_PORTS=22,80,443,6379</code>
+            <code>ALERT_WEBHOOK_URL=https://…</code>
+            <code>ALERT_TELEGRAM_TOKEN=… · ALERT_TELEGRAM_CHAT=…</code>
+          </div>
+          <p className="subdomain-note">
+            Переменные задаются в окружении сервера. Токены и URL вебхуков не вводятся в браузере и
+            никогда не попадают в клиент.
+          </p>
+        </>
+      )}
+
+      {status && enabled && (
+        <>
+          <div className="monitor-meta">
+            <span>интервал {status.intervalMin} мин</span>
+            <span>{status.ports} портов</span>
+            <span>{channels || 'только лог'}</span>
+          </div>
+
+          <div className="monitor-targets">
+            {status.targets.map((item) => (
+              <div className="monitor-row" key={item.target}>
+                <div className="monitor-row-head">
+                  <b>{item.target}</b>
+                  <span className="monitor-open">{item.open} откр.</span>
+                  <em title={item.lastRun ? new Date(item.lastRun).toLocaleString() : 'ещё не проверялся'}>
+                    {timeOf(item.lastRun)}
+                  </em>
+                </div>
+                {item.error ? (
+                  <span className="monitor-error">{item.error}</span>
+                ) : (
+                  <div className="monitor-diff">
+                    {item.added.length > 0 && (
+                      <span className="monitor-added">+{item.added.length} новых</span>
+                    )}
+                    {item.removed.length > 0 && (
+                      <span className="monitor-removed">−{item.removed.length} закрылись</span>
+                    )}
+                    {!item.added.length && !item.removed.length && (
+                      <span className="monitor-same">без изменений</span>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {status.history.length > 0 && (
+            <div className="monitor-history">
+              <span className="monitor-history-label">ПОСЛЕДНИЕ ИЗМЕНЕНИЯ</span>
+              {status.history.slice(0, 4).map((change) => (
+                <div className="monitor-change" key={`${change.at}-${change.target}`}>
+                  <em>{timeOf(change.at)}</em>
+                  <b>{change.target}</b>
+                  <span>
+                    {change.added.length ? `+${change.added.slice(0, 3).join(', ')}` : ''}
+                    {change.added.length && change.removed.length ? ' · ' : ''}
+                    {change.removed.length ? `−${change.removed.slice(0, 3).join(', ')}` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="btn ghost small monitor-test"
+            onClick={() => void runTest()}
+            disabled={!channels || test.status === 'busy'}
+            title={channels ? 'Отправить тестовое уведомление в настроенные каналы' : 'Сначала задай вебхук или Telegram в окружении'}
+          >
+            {test.status === 'busy' ? <span className="spinner" /> : '⌁'} ТЕСТ УВЕДОМЛЕНИЯ
+          </button>
+
+          {test.status !== 'idle' && test.status !== 'busy' && (
+            <p className={`import-note ${test.status === 'ok' ? 'ok' : 'error'}`}>{test.message}</p>
+          )}
+
+          <p className="subdomain-note">
+            Скан идёт на сервере по расписанию; уведомление уходит только при изменении набора
+            открытых портов. Состояние хранится на диске сервера.
+          </p>
+        </>
+      )}
+    </section>
+  )
+}

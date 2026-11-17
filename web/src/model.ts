@@ -603,39 +603,83 @@ function rdpPayload(host: string, port: number): string {
 }
 
 /** Local, one-click follow-ups for an open port. Nothing is sent to a server. */
+function webActions(state: ScanState, ip: IpEntry, port: number): SelectionAction[] {
+  const url = webAddress(state, ip.ip, port)
+  const secure = port === 443 || port === 8443
+  const curl = `curl -sS -D - -o /dev/null -L --max-time 10 '${url}'`
+  return [
+    { id: 'browser', label: 'ОТКРЫТЬ В БРАУЗЕРЕ', kind: 'open', value: url, hint: url },
+    {
+      id: 'burp',
+      label: 'ОТКРЫТЬ В BURP',
+      kind: 'copy',
+      value: url,
+      hint: 'Скопировать URL и вставить в Burp Repeater (Ctrl+R)',
+    },
+    {
+      id: 'curl',
+      label: 'CURL-ЗАПРОС',
+      kind: 'copy',
+      value: curl,
+      hint: `${secure ? 'HTTPS' : 'HTTP'}-заголовки без тела ответа`,
+    },
+  ]
+}
+
+function sshAction(host: string): SelectionAction {
+  const command = `ssh user@${host}`
+  return { id: 'ssh', label: 'КОПИРОВАТЬ SSH', kind: 'copy', value: command, hint: command }
+}
+
+function rdpAction(host: string, port: number): SelectionAction {
+  return {
+    id: 'rdp',
+    label: 'СКАЧАТЬ .RDP',
+    kind: 'download',
+    value: rdpPayload(host, port),
+    filename: `${host.replace(/[\\/:*?"<>|]/g, '-')}-${port}.rdp`,
+    hint: 'Файл подключения Remote Desktop',
+  }
+}
+
+function ncAction(host: string, port: number): SelectionAction {
+  const command = `nc -zv ${host} ${port}`
+  return { id: 'nc', label: 'ПРОВЕРИТЬ NC', kind: 'copy', value: command, hint: command }
+}
+
+const WEB_PORTS = new Set([80, 443, 8000, 8080, 8443, 8888])
+
 function directActions(state: ScanState, ip: IpEntry, port: PortInfo): SelectionAction[] {
   if (port.state !== 'open' || port.protocol === 'udp') return []
   const host = state.host && !ipLiteral(state.host) ? state.host : ip.ip
-  if (port.port === 80 || port.port === 443) {
-    const url = webAddress(state, ip.ip, port.port)
-    return [
-      { id: 'browser', label: 'ОТКРЫТЬ В БРАУЗЕРЕ', kind: 'open', value: url, hint: url },
-      {
-        id: 'burp',
-        label: 'ОТКРЫТЬ В BURP',
-        kind: 'copy',
-        value: url,
-        hint: 'Скопировать URL и вставить в Burp Repeater (Ctrl+R)',
-      },
-    ]
+  const http = ip.http?.port === port.port || ip.httpAll?.some((entry) => entry.port === port.port)
+  if (WEB_PORTS.has(port.port) || (http && (port.port === 80 || port.port === 443))) {
+    return [...webActions(state, ip, port.port), ncAction(host, port.port)]
   }
-  if (port.port === 22) {
-    const command = `ssh user@${host}`
-    return [{ id: 'ssh', label: 'КОПИРОВАТЬ SSH', kind: 'copy', value: command, hint: command }]
-  }
-  if (port.port === 3389) {
-    return [
-      {
-        id: 'rdp',
-        label: 'СКАЧАТЬ .RDP',
-        kind: 'download',
-        value: rdpPayload(host, port.port),
-        filename: `${host.replace(/[\\/:*?"<>|]/g, '-')}-${port.port}.rdp`,
-        hint: 'Файл подключения Remote Desktop',
-      },
-    ]
-  }
-  return []
+  if (port.port === 22) return [sshAction(host), ncAction(host, port.port)]
+  if (port.port === 3389) return [rdpAction(host, port.port), ncAction(host, port.port)]
+  return [ncAction(host, port.port)]
+}
+
+/** Quick actions on the node card, based on the most useful open port. */
+function nodeActions(state: ScanState, ip: IpEntry): SelectionAction[] {
+  const open = Object.values(ip.ports)
+    .filter((port) => port.state === 'open' && port.protocol !== 'udp')
+    .sort((a, b) => a.port - b.port)
+  if (!open.length) return []
+  const host = state.host && !ipLiteral(state.host) ? state.host : ip.ip
+  const actions: SelectionAction[] = []
+  const web =
+    open.find((port) => port.port === 443) ||
+    open.find((port) => port.port === 80) ||
+    open.find((port) => WEB_PORTS.has(port.port))
+  if (web) actions.push(...webActions(state, ip, web.port))
+  const ssh = open.find((port) => port.port === 22)
+  if (ssh) actions.push(sshAction(host))
+  const rdp = open.find((port) => port.port === 3389)
+  if (rdp) actions.push(rdpAction(host, rdp.port))
+  if (!actions.length) actions.push(ncAction(host, open[0].port))
+  return actions.slice(0, 6)
 }
 
 export function getSelectionDetails(state: ScanState, selection: Selection): SelectionDetails | null {
@@ -722,6 +766,7 @@ export function getSelectionDetails(state: ScanState, selection: Selection): Sel
       findings: findingsForIp(ip, state.host || state.target || ''),
       tech: techForIp(ip),
       packet: packetFor(ip, state.host || state.target || ''),
+      actions: nodeActions(state, ip),
     }
   }
 

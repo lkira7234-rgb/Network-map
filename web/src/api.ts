@@ -118,6 +118,59 @@ export interface SubdomainResponse {
   cached?: boolean
 }
 
+export interface MonitorTargetStatus {
+  target: string
+  lastRun: number | null
+  nextRun: number | null
+  open: number
+  added: string[]
+  removed: string[]
+  error: string | null
+}
+
+export interface MonitorChange {
+  at: number
+  target: string
+  added: string[]
+  removed: string[]
+}
+
+export interface MonitorStatus {
+  enabled: boolean
+  intervalMin: number
+  ports: number
+  alerts: { webhook: boolean; telegram: boolean }
+  targets: MonitorTargetStatus[]
+  history: MonitorChange[]
+  hint?: string | null
+}
+
+export async function fetchMonitor(signal?: AbortSignal): Promise<MonitorStatus> {
+  const response = await fetch(`${API_BASE}/api/monitor`, {
+    signal,
+    headers: { Accept: 'application/json' },
+  })
+  await assertOk(response)
+  const data = (await response.json()) as MonitorStatus
+  return {
+    enabled: Boolean(data.enabled),
+    intervalMin: Number(data.intervalMin) || 0,
+    ports: Number(data.ports) || 0,
+    alerts: {
+      webhook: Boolean(data.alerts?.webhook),
+      telegram: Boolean(data.alerts?.telegram),
+    },
+    targets: Array.isArray(data.targets) ? data.targets : [],
+    history: Array.isArray(data.history) ? data.history : [],
+    hint: data.hint ?? null,
+  }
+}
+
+export async function testMonitorAlert(): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/monitor/test`, { method: 'POST' })
+  await assertOk(response)
+}
+
 export async function fetchSubdomains(host: string, signal?: AbortSignal): Promise<SubdomainResponse> {
   const response = await fetch(`${API_BASE}/api/subdomains?host=${encodeURIComponent(host)}`, {
     signal,

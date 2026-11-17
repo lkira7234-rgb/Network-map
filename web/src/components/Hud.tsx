@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { ScanEvent, ScanState, Selection, SelectionAction, SubdomainInfo, SubdomainState } from '../types'
 import { Probe } from './Probe'
+import { MonitorPanel } from './MonitorPanel'
 import { getSelectionDetails, objectSummary, portCounts } from '../model'
 import { RateLimitInfo } from '../api'
 import { DEFAULT_FORM, PORT_PRESETS, ScanFormValues, formToUrl } from '../form'
@@ -706,7 +707,8 @@ export function Hud({
                 )}
                 <p className="quick-disclaimer">
                   Ссылки строятся локально из данных скана. Burp получает URL через буфер обмена —
-                  вставь его в Repeater. Для SSH замени <code>user</code> на своё имя.
+                  вставь его в Repeater. Для SSH замени <code>user</code>, для <code>nc</code> нужен
+                  netcat из nmap/ncat.
                 </p>
               </div>
             )}
@@ -1068,6 +1070,8 @@ export function Hud({
             </>
           )}
         </section>
+
+        <MonitorPanel />
 
         <section className={`panel telemetry phase-${model.phase}`}>
           <div className="panel-head">

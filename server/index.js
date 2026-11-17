@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { runScan, normalizeTarget } from './scan.js'
 import { runDemo } from './demo.js'
+import { createMonitor } from './monitor.js'
 import { createRateLimiter } from './rate-limit.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -213,6 +214,57 @@ app.get('/api/demo', async (req, res) => {
 })
 
 /* ------------------------------------------------------------------ */
+/*  perimeter monitor                                                  */
+/* ------------------------------------------------------------------ */
+
+const monitor = createMonitor()
+let lastMonitorTest = 0
+const MONITOR_TEST_COOLDOWN_MS = 10 * 60_000
+
+app.get('/api/monitor', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.json({
+    ...monitor.publicStatus(),
+    hint: monitor.enabled
+      ? null
+      : 'Мониторинг выключен. Задай MONITOR_TARGETS и (по желанию) ALERT_WEBHOOK_URL или ALERT_TELEGRAM_TOKEN + ALERT_TELEGRAM_CHAT в окружении сервера.',
+  })
+})
+
+app.post('/api/monitor/test', async (req, res) => {
+  if (!monitor.enabled) {
+    res.status(400).json({ error: 'Мониторинг не настроен на сервере.' })
+    return
+  }
+  const now = Date.now()
+  if (now - lastMonitorTest < MONITOR_TEST_COOLDOWN_MS) {
+    const retryAfter = Math.ceil((MONITOR_TEST_COOLDOWN_MS - (now - lastMonitorTest)) / 1000)
+    res.setHeader('Retry-After', String(retryAfter))
+    res.status(429).json({ error: `Тест уже отправлялся. Повтори через ${retryAfter} с.`, retryAfter })
+    return
+  }
+  const sent = await monitor.sendTest()
+  if (!sent) {
+    res.status(400).json({ error: 'Вебхук или Telegram не настроены в окружении сервера.' })
+    return
+  }
+  lastMonitorTest = now
+  res.json({ ok: true })
+})
+
+// External cron hook (e.g. GitHub Actions) for hosts that sleep when idle.
+// It only works when the operator sets a long random MONITOR_TOKEN.
+app.post('/api/monitor/run', async (req, res) => {
+  const token = String(process.env.MONITOR_TOKEN || '')
+  if (!token || req.get('x-monitor-token') !== token) {
+    res.status(404).json({ error: 'API endpoint not found' })
+    return
+  }
+  const result = await monitor.runNow()
+  res.json({ ok: true, ...result })
+})
+
+/* ------------------------------------------------------------------ */
 /*  certificate transparency                                           */
 /* ------------------------------------------------------------------ */
 
@@ -354,4 +406,7 @@ app.listen(PORT, HOST, () => {
   console.log(`\n  NETWORK//MAP server  →  http://${HOST}:${PORT}`)
   console.log(`  API                 →  POST /api/scan · GET /api/demo`)
   console.log(`  Limits              →  ${SCAN_LIMIT} scans/${Math.round(SCAN_WINDOW_MS / 1000)}s per IP · ${MAX_ACTIVE_SCANS} concurrent\n`)
+  if (monitor.enabled) {
+    monitor.start().catch((error) => console.warn(`[monitor] start failed: ${error?.message || error}`))
+  }
 })

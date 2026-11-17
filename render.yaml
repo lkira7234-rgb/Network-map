@@ -28,3 +28,17 @@ services:
         value: "10"
       - key: MAX_ACTIVE_SCANS
         value: "4"
+      # Optional perimeter monitor. Uncomment and fill in to enable server-side
+      # scheduled scans and webhook alerts (see docs/MONITORING.md).
+      # - key: MONITOR_TARGETS
+      #   value: example.com
+      # - key: MONITOR_PORTS
+      #   value: "22,80,443,6379"
+      # - key: MONITOR_INTERVAL_MIN
+      #   value: "60"
+      # - key: ALERT_WEBHOOK_URL
+      #   sync: false
+      # - key: ALERT_TELEGRAM_TOKEN
+      #   sync: false
+      # - key: ALERT_TELEGRAM_CHAT
+      #   sync: false
