@@ -190,7 +190,11 @@ export function MonitorPanel() {
             <div className="monitor-history">
               <span className="monitor-history-label">ПОСЛЕДНИЕ ИЗМЕНЕНИЯ</span>
               {status.history.slice(0, 4).map((change) => (
-                <div className="monitor-change" key={`${change.at}-${change.target}`}>
+                <div
+                  className="monitor-change"
+                  key={`${change.at}-${change.target}`}
+                  title={change.source === 'scan' ? 'Скан из интерфейса' : 'Серверный монитор'}
+                >
                   <em>{timeOf(change.at)}</em>
                   <b>{change.target}</b>
                   <span>{diffSummary(change)}</span>

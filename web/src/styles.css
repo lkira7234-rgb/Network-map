@@ -3031,10 +3031,16 @@ select.probe-input {
 
 .monitor-change {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   font-family: var(--font-mono);
   font-size: 7.5px;
   color: #9db9c4;
+  overflow-wrap: anywhere;
+}
+
+.monitor-change span {
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
