@@ -57,3 +57,4 @@ npm start
 Требуется Node.js 20+.
 
 Серверный мониторинг периметра и алерты в Telegram/Discord — [docs/MONITORING.md](docs/MONITORING.md).
+Сайт можно добавить в мониторинг, просто отправив его боту в личные сообщения: `/add example.com`.

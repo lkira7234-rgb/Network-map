@@ -42,6 +42,12 @@ services:
       #   value: "1"
       # - key: NOTIFY_FIRST_SCAN
       #   value: "1"
+      # Telegram bot: visitors can add sites in private messages. Enabled when
+      # ALERT_TELEGRAM_TOKEN is set; BOT_ENABLED=0 disables it.
+      # - key: BOT_ENABLED
+      #   value: "1"
+      # - key: BOT_MAX_PER_CHAT
+      #   value: "5"
       # - key: ALERT_WEBHOOK_URL
       #   sync: false
       # - key: ALERT_TELEGRAM_TOKEN

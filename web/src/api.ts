@@ -120,6 +120,7 @@ export interface SubdomainResponse {
 
 export interface MonitorTargetStatus {
   target: string
+  source?: 'env' | 'bot'
   lastRun: number | null
   nextRun: number | null
   open: number
@@ -155,6 +156,8 @@ export interface MonitorStatus {
   notifyFirst?: boolean
   trace?: boolean
   telegramChannel?: boolean
+  botTargets?: number
+  bot?: { enabled: boolean; polling: boolean; chats: number; targets: number; maxPerChat: number }
   env?: { targets: number; telegramToken: boolean; telegramChat: boolean; webhook: boolean }
   issues?: string[]
   targets: MonitorTargetStatus[]
@@ -181,6 +184,16 @@ export async function fetchMonitor(signal?: AbortSignal): Promise<MonitorStatus>
     notifyFirst: Boolean(data.notifyFirst),
     trace: Boolean(data.trace),
     telegramChannel: Boolean(data.telegramChannel),
+    botTargets: Number(data.botTargets) || 0,
+    bot: data.bot
+      ? {
+          enabled: Boolean(data.bot.enabled),
+          polling: Boolean(data.bot.polling),
+          chats: Number(data.bot.chats) || 0,
+          targets: Number(data.bot.targets) || 0,
+          maxPerChat: Number(data.bot.maxPerChat) || 0,
+        }
+      : undefined,
     env: data.env
       ? {
           targets: Number(data.env.targets) || 0,

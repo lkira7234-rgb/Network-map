@@ -109,8 +109,9 @@ export function MonitorPanel() {
       {status && !active && (
         <>
           <p className="history-empty">
-            Серверный мониторинг выключен. Он работает без открытой вкладки и присылает DIFF в
-            Telegram, Discord или любой вебхук.
+            {status.bot?.enabled
+              ? 'Пока нет сайтов в мониторинге. Пришли домен или IP боту в личные сообщения — сайт появится здесь и будет проверяться раз в час.'
+              : 'Серверный мониторинг выключен. Он работает без открытой вкладки и присылает DIFF в Telegram, Discord или любой вебхук.'}
           </p>
           <div className="monitor-env">
             <code>MONITOR_TARGETS=example.com</code>
@@ -147,6 +148,9 @@ export function MonitorPanel() {
             <span>{status.enabled ? `интервал ${status.intervalMin} мин` : 'только алерты по сканам'}</span>
             <span>{status.ports} портов</span>
             <span>{channels || 'только лог'}</span>
+            {status.bot?.enabled && (
+              <span>{status.bot.polling ? 'бот онлайн' : 'бот офлайн'}</span>
+            )}
           </div>
 
           {status.alerts.telegram && !status.telegramChannel && (
@@ -162,6 +166,11 @@ export function MonitorPanel() {
                 <div className="monitor-row" key={item.target}>
                   <div className="monitor-row-head">
                     <b>{item.target}</b>
+                    {item.source === 'bot' && (
+                      <span className="monitor-src" title="Добавлен через Telegram-бота">
+                        TG
+                      </span>
+                    )}
                     <span className="monitor-open">{item.open} откр.</span>
                     <em title={item.lastRun ? new Date(item.lastRun).toLocaleString() : 'ещё не проверялся'}>
                       {timeOf(item.lastRun)}

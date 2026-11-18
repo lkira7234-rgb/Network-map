@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises'
+import net from 'node:net'
 import path from 'node:path'
 import { normalizeTarget, parsePorts, runScan } from './scan.js'
 
@@ -14,6 +15,7 @@ import { normalizeTarget, parsePorts, runScan } from './scan.js'
 
 const DEFAULT_PORTS = '22,80,443,3389,3306,5432,6379,8080,9200,27017'
 const MAX_TARGETS = 5
+const MAX_DYNAMIC_TARGETS = 30
 const MAX_PORTS = 200
 const MAX_HISTORY = 30
 const MAX_SNAPSHOTS = 200
@@ -65,6 +67,25 @@ function readPorts(raw) {
     if (ports.size >= MAX_PORTS) break
   }
   return { ports: [...ports].sort((a, b) => a - b).slice(0, MAX_PORTS), invalid }
+}
+
+function isPrivateHost(host) {
+  const value = String(host || '').toLowerCase().replace(/^\[|\]$/g, '')
+  if (['localhost', '0.0.0.0'].includes(value)) return true
+  if (value.endsWith('.local') || value.endsWith('.internal') || value.endsWith('.localhost')) return true
+  if (net.isIP(value) === 4) {
+    return (
+      /^10\./.test(value) ||
+      /^127\./.test(value) ||
+      /^192\.168\./.test(value) ||
+      /^169\.254\./.test(value) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(value)
+    )
+  }
+  if (net.isIP(value) === 6) {
+    return value === '::1' || /^f[cd][0-9a-f]{2}:/i.test(value) || /^fe80:/i.test(value)
+  }
+  return false
 }
 
 function describePort(key, labels) {
@@ -155,7 +176,7 @@ async function postJson(url, body, timeoutMs = 8000) {
 }
 
 export function createMonitor(env = process.env, logger = console) {
-  const targets = readTargets(env.MONITOR_TARGETS)
+  const envTargets = readTargets(env.MONITOR_TARGETS)
   const { ports, invalid: invalidPorts } = readPorts(env.MONITOR_PORTS)
   const intervalMin = Math.max(MIN_INTERVAL_MIN, Number(env.MONITOR_INTERVAL_MIN) || 60)
   const webhookUrl = String(env.ALERT_WEBHOOK_URL || '').trim()
@@ -165,12 +186,15 @@ export function createMonitor(env = process.env, logger = console) {
     ? path.resolve(env.MONITOR_STATE_FILE)
     : path.resolve(process.cwd(), '.monitor-state.json')
 
-  const enabled = targets.length > 0 && ports.length > 0
   const telegram = Boolean(telegramToken && telegramChat)
   const configuredChannel = /^-100/.test(telegramChat)
   let telegramTarget = telegramChat
   let channelFound = configuredChannel
   let lastChannelProbe = 0
+  let externalDiscovery = false
+  /** Sites added through the bot, oldest first. */
+  const dynamicTargets = new Map()
+  const isEnabled = () => ports.length > 0 && (envTargets.length > 0 || dynamicTargets.size > 0)
   // Follow scans started from the UI: any host a visitor scans is compared with
   // the previous snapshot and changes are posted to the same channels. On by
   // default (the owner asked for alerts about every scanned site); set
@@ -180,14 +204,19 @@ export function createMonitor(env = process.env, logger = console) {
   // Traceroute makes monitor scans much slower, so it is opt-in.
   const trace = flag(env.MONITOR_TRACE)
 
-  const issues = []
-  if (!targets.length) issues.push('MONITOR_TARGETS не задан или не распознан')
-  if (!ports.length) issues.push('MONITOR_PORTS пуст или некорректен — пример: 22,80,443,6379')
-  else if (invalidPorts.length) {
-    issues.push(`MONITOR_PORTS: пропущено некорректных значений — ${invalidPorts.length}`)
-  }
-  if (notifyScans && !telegram && !webhookUrl) {
-    issues.push('каналы не настроены — изменения сканов пишутся только в лог')
+  function issuesNow() {
+    const list = []
+    if (!ports.length) list.push('MONITOR_PORTS пуст или некорректен — пример: 22,80,443,6379')
+    else if (invalidPorts.length) {
+      list.push(`MONITOR_PORTS: пропущено некорректных значений — ${invalidPorts.length}`)
+    }
+    if (ports.length && !envTargets.length && !dynamicTargets.size) {
+      list.push('целей нет — задай MONITOR_TARGETS или добавь сайт через Telegram-бота')
+    }
+    if (notifyScans && !telegram && !webhookUrl) {
+      list.push('каналы не настроены — изменения сканов пишутся только в лог')
+    }
+    return list
   }
 
   /**
@@ -202,11 +231,13 @@ export function createMonitor(env = process.env, logger = console) {
   const snapshots = new Map()
   /** @type {Array<Record<string, unknown>>} */
   const history = []
-  const status = new Map(
-    targets.map((target) => [
-      target,
-      {
+  const status = new Map()
+  function ensureStatus(target, source = 'bot') {
+    let entry = status.get(target)
+    if (!entry) {
+      entry = {
         target,
+        source,
         lastRun: null,
         nextRun: null,
         open: 0,
@@ -219,9 +250,12 @@ export function createMonitor(env = process.env, logger = console) {
         hopAdded: 0,
         hopRemoved: 0,
         error: null,
-      },
-    ]),
-  )
+      }
+      status.set(target, entry)
+    }
+    return entry
+  }
+  for (const target of envTargets) ensureStatus(target, 'env')
 
   let timer = null
   let running = false
@@ -273,7 +307,8 @@ export function createMonitor(env = process.env, logger = console) {
    * That way "add the bot to the channel" is enough — no env edit needed.
    */
   async function probeChannel(force = false) {
-    if (configuredChannel || !telegramToken) return
+    // The bot owns getUpdates while it runs, so it reports the channel instead.
+    if (externalDiscovery || configuredChannel || !telegramToken) return
     if (!force && Date.now() - lastChannelProbe < 5 * 60_000) return
     lastChannelProbe = Date.now()
     try {
@@ -300,6 +335,76 @@ export function createMonitor(env = process.env, logger = console) {
     } catch {
       // Bot API unreachable or getUpdates conflicts with a webhook: keep chat.
     }
+  }
+
+  function resolveHost(raw) {
+    try {
+      return normalizeTarget(String(raw || '').replace(/^["'`]+|["'`]+$/g, '').trim()).host
+    } catch {
+      return null
+    }
+  }
+
+  function hasTarget(host) {
+    return envTargets.includes(host) || dynamicTargets.has(host)
+  }
+
+  /**
+   * Add a site supplied by a bot subscriber. The first scan is a silent
+   * baseline; later hourly scans report diffs to the alert channel.
+   */
+  function addTarget(raw) {
+    const host = resolveHost(raw)
+    if (!host) return { ok: false, error: 'не похоже на домен или IP' }
+    if (isPrivateHost(host)) {
+      return { ok: false, error: 'локальные и приватные адреса не сканируются' }
+    }
+    if (hasTarget(host)) return { ok: false, already: true, host }
+    if (dynamicTargets.size >= MAX_DYNAMIC_TARGETS) {
+      return { ok: false, error: `лимит ${MAX_DYNAMIC_TARGETS} сайтов — убери лишние` }
+    }
+    dynamicTargets.set(host, { at: Date.now() })
+    ensureStatus(host, 'bot')
+    ensureSchedule()
+    return { ok: true, host }
+  }
+
+  function removeTarget(raw) {
+    const host = resolveHost(raw)
+    if (!host) return { ok: false, error: 'не похоже на домен или IP' }
+    if (envTargets.includes(host)) {
+      return { ok: false, error: 'задан в MONITOR_TARGETS и убирается только в окружении' }
+    }
+    if (!dynamicTargets.has(host)) return { ok: false, error: 'этот сайт не отслеживается' }
+    dynamicTargets.delete(host)
+    status.delete(host)
+    return { ok: true, host }
+  }
+
+  function dynamicCount() {
+    return dynamicTargets.size
+  }
+
+  function useExternalChannelDiscovery() {
+    externalDiscovery = true
+  }
+
+  /** Called by the bot when it sees the channel in my_chat_member/channel_post. */
+  function setTelegramChannel(id, title) {
+    const value = String(id || '')
+    if (!/^-100\d+$/.test(value)) return false
+    const changed = !channelFound || telegramTarget !== value
+    telegramTarget = value
+    channelFound = true
+    return changed
+  }
+
+  function primeTarget(host) {
+    if (!hasTarget(host)) return
+    ensureStatus(host, dynamicTargets.has(host) ? 'bot' : 'env')
+    setTimeout(() => {
+      scanOne(host).catch((error) => logger.warn(`[monitor] prime ${host}: ${error.message}`))
+    }, 400).unref?.()
   }
 
   async function deliver(text) {
@@ -383,7 +488,19 @@ export function createMonitor(env = process.env, logger = console) {
     }
   }
 
+  const scanning = new Set()
+
   async function scanOne(target) {
+    if (scanning.has(target)) return { target, skipped: true }
+    scanning.add(target)
+    try {
+      return await scanOneInner(target)
+    } finally {
+      scanning.delete(target)
+    }
+  }
+
+  async function scanOneInner(target) {
     const entry = status.get(target)
     const previous = snapshots.get(target)
     const { open, labels, nodes, hops, error } = await scanTarget(target)
@@ -499,11 +616,18 @@ export function createMonitor(env = process.env, logger = console) {
   }
 
   async function runNow() {
-    if (!enabled || running) return { skipped: true, results: [] }
+    if (!isEnabled() || running) return { skipped: true, results: [] }
     running = true
     const results = []
+    const startedAt = Date.now()
+    // Keep one cycle inside a sane window even with many bot subscriptions.
+    const budgetMs = Math.max(5, Math.min(intervalMin, 10)) * 60_000
     try {
-      for (const target of targets) {
+      for (const target of [...envTargets, ...dynamicTargets.keys()]) {
+        if (Date.now() - startedAt > budgetMs) {
+          logger.warn('[monitor] cycle budget exceeded, remaining targets postponed')
+          break
+        }
         results.push(await scanOne(target))
       }
     } finally {
@@ -527,20 +651,38 @@ export function createMonitor(env = process.env, logger = console) {
     timer.unref?.()
   }
 
+  /** The bot may add the first site after boot: start the hourly cycle then. */
+  function ensureSchedule() {
+    if (!ports.length || !isEnabled()) return
+    if (!started) {
+      // The monitor never started (no targets and no scan alerts): load the
+      // snapshots first so known hosts are not silently re-baselined.
+      started = true
+      loadState()
+        .then(() => {
+          if (started && !timer) schedule()
+        })
+        .catch((error) => logger.warn(`[monitor] state load failed: ${error.message}`))
+      return
+    }
+    if (!timer) schedule()
+  }
+
   async function start() {
     if (started) return
     // Scan alerts alone are useful (no scheduled targets): load the snapshots so
     // a restart does not turn every known host into a silent new baseline.
-    if (!enabled && !notifyScans) return
+    if (!isEnabled() && !notifyScans) return
     started = true
     await loadState()
     await probeChannel()
-    if (!enabled) {
+    if (!isEnabled()) {
       logger.log('[monitor] scan alerts only, no scheduled targets')
       return
     }
     logger.log(
-      `[monitor] ${targets.length} target(s), ${ports.length} port(s), every ${intervalMin} min` +
+      `[monitor] ${envTargets.length + dynamicTargets.size} target(s)` +
+        ` (${dynamicTargets.size} via bot), ${ports.length} port(s), every ${intervalMin} min` +
         `${webhookUrl ? ', webhook' : ''}${telegram ? ', telegram' : ''}` +
         `${channelFound ? ' (channel)' : ''}${notifyScans ? ', scan alerts' : ''}`,
     )
@@ -559,7 +701,7 @@ export function createMonitor(env = process.env, logger = console) {
 
   function publicStatus() {
     return {
-      enabled,
+      enabled: isEnabled(),
       intervalMin,
       ports: ports.length,
       alerts: { webhook: Boolean(webhookUrl), telegram },
@@ -567,15 +709,16 @@ export function createMonitor(env = process.env, logger = console) {
       notifyFirst,
       trace,
       telegramChannel: channelFound,
+      botTargets: dynamicTargets.size,
       // Presence of configuration only: no values, URLs or tokens. Lets an
       // operator see which variable the running process is missing.
       env: {
-        targets: targets.length,
+        targets: envTargets.length,
         telegramToken: Boolean(telegramToken),
         telegramChat: Boolean(telegramChat),
         webhook: Boolean(webhookUrl),
       },
-      issues,
+      issues: issuesNow(),
       targets: [...status.values()].map((entry) => ({
         ...entry,
         added: entry.added.slice(0, 40),
@@ -592,14 +735,16 @@ export function createMonitor(env = process.env, logger = console) {
     await probeChannel(true)
     const results = await deliver(
       `\u2705 NETWORK//MAP \u00b7 тестовое уведомление\n` +
-        `Цель: ${targets[0] || 'все сканы'} · портов: ${ports.length} · интервал: ${intervalMin} мин\n` +
+        `Цель: ${envTargets[0] || 'все сканы'} · портов: ${ports.length} · интервал: ${intervalMin} мин\n` +
         `Куда: ${channelFound ? 'Telegram-канал' : telegram ? 'Telegram' : 'вебхук'}`,
     )
     return { sent: results.some((result) => result.ok), results }
   }
 
   return {
-    enabled,
+    get enabled() {
+      return isEnabled()
+    },
     intervalMin,
     notifyScans,
     start,
@@ -608,7 +753,15 @@ export function createMonitor(env = process.env, logger = console) {
     observeScan,
     sendTest,
     publicStatus,
-    targets,
+    addTarget,
+    removeTarget,
+    hasTarget,
+    resolveHost,
+    dynamicCount,
+    primeTarget,
+    useExternalChannelDiscovery,
+    setTelegramChannel,
+    targets: envTargets,
     ports,
   }
 }

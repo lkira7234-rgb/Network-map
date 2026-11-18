@@ -2986,6 +2986,16 @@ select.probe-input {
   color: var(--green);
 }
 
+.monitor-src {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: 1px solid rgba(120, 220, 255, 0.35);
+  border-radius: 3px;
+  font-size: 6.5px;
+  letter-spacing: 0.08em;
+  color: #8fd8ff;
+}
+
 .monitor-row-head em {
   flex: 0 0 auto;
   font-style: normal;

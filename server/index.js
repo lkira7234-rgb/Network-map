@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { runScan, normalizeTarget } from './scan.js'
 import { runDemo } from './demo.js'
 import { createMonitor } from './monitor.js'
+import { createTelegramBot } from './bot.js'
 import { createRateLimiter } from './rate-limit.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -242,6 +243,10 @@ app.get('/api/demo', async (req, res) => {
 /* ------------------------------------------------------------------ */
 
 const monitor = createMonitor()
+const bot = createTelegramBot({
+  token: String(process.env.ALERT_TELEGRAM_TOKEN || '').trim(),
+  monitor,
+})
 let lastMonitorTest = 0
 const MONITOR_TEST_COOLDOWN_MS = 10 * 60_000
 
@@ -249,9 +254,12 @@ app.get('/api/monitor', (req, res) => {
   res.setHeader('Cache-Control', 'no-store')
   res.json({
     ...monitor.publicStatus(),
+    bot: bot.publicStatus(),
     hint: monitor.enabled
       ? null
-      : 'Мониторинг выключен. Задай MONITOR_TARGETS и (по желанию) ALERT_WEBHOOK_URL или ALERT_TELEGRAM_TOKEN + ALERT_TELEGRAM_CHAT в окружении сервера.',
+      : bot.enabled
+        ? 'Целей пока нет: пришли сайт боту в личные сообщения или задай MONITOR_TARGETS в окружении.'
+        : 'Мониторинг выключен. Задай MONITOR_TARGETS и (по желанию) ALERT_WEBHOOK_URL или ALERT_TELEGRAM_TOKEN + ALERT_TELEGRAM_CHAT в окружении сервера.',
   })
 })
 
@@ -437,7 +445,10 @@ app.listen(PORT, HOST, () => {
   console.log(`\n  NETWORK//MAP server  →  http://${HOST}:${PORT}`)
   console.log(`  API                 →  POST /api/scan · GET /api/demo`)
   console.log(`  Limits              →  ${SCAN_LIMIT} scans/${Math.round(SCAN_WINDOW_MS / 1000)}s per IP · ${MAX_ACTIVE_SCANS} concurrent\n`)
-  if (monitor.enabled) {
-    monitor.start().catch((error) => console.warn(`[monitor] start failed: ${error?.message || error}`))
-  }
+  // The bot can receive new sites at any time, so it starts even when the
+  // hourly monitor is idle; monitor.start() is a no-op in that case.
+  monitor
+    .start()
+    .then(() => bot.start())
+    .catch((error) => console.warn(`[monitor] start failed: ${error?.message || error}`))
 })
