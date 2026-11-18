@@ -167,7 +167,10 @@ export function createMonitor(env = process.env, logger = console) {
 
   const enabled = targets.length > 0 && ports.length > 0
   const telegram = Boolean(telegramToken && telegramChat)
-  const telegramChannel = /^-100/.test(telegramChat)
+  const configuredChannel = /^-100/.test(telegramChat)
+  let telegramTarget = telegramChat
+  let channelFound = configuredChannel
+  let lastChannelProbe = 0
   // Follow scans started from the UI: any host a visitor scans is compared with
   // the previous snapshot and changes are posted to the same channels. On by
   // default (the owner asked for alerts about every scanned site); set
@@ -264,9 +267,47 @@ export function createMonitor(env = process.env, logger = console) {
     }
   }
 
+  /**
+   * If the operator added the bot to a channel instead of passing a `-100…`
+   * chat id, discover it from pending updates (my_chat_member / channel_post).
+   * That way "add the bot to the channel" is enough — no env edit needed.
+   */
+  async function probeChannel(force = false) {
+    if (configuredChannel || !telegramToken) return
+    if (!force && Date.now() - lastChannelProbe < 5 * 60_000) return
+    lastChannelProbe = Date.now()
+    try {
+      const url =
+        `https://api.telegram.org/bot${telegramToken}/getUpdates` +
+        `?allowed_updates=${encodeURIComponent('["channel_post","my_chat_member"]')}`
+      const response = await fetch(url, { signal: AbortSignal.timeout(8000) })
+      if (!response.ok) return
+      const data = await response.json()
+      let latest = null
+      for (const update of Array.isArray(data?.result) ? data.result : []) {
+        const chat = update.channel_post?.chat || update.my_chat_member?.chat
+        if (chat?.type !== 'channel') continue
+        const id = String(chat.id)
+        if (!id.startsWith('-100')) continue
+        if (!latest || update.update_id > latest.id) latest = { id, updateId: update.update_id, title: chat.title }
+      }
+      if (latest) {
+        telegramTarget = latest.id
+        channelFound = true
+        // Title is public; the numeric id is only partially logged.
+        logger.log(`[monitor] telegram channel: ${latest.title || latest.id.slice(0, 5) + '…'}`)
+      }
+    } catch {
+      // Bot API unreachable or getUpdates conflicts with a webhook: keep chat.
+    }
+  }
+
   async function deliver(text) {
     const jobs = []
     const results = []
+    if (telegram) {
+      await probeChannel()
+    }
     if (webhookUrl) {
       // `content` is read by Discord, `text` by Slack and most generic hooks.
       jobs.push(
@@ -281,7 +322,7 @@ export function createMonitor(env = process.env, logger = console) {
     if (telegram) {
       jobs.push(
         postJson(`https://api.telegram.org/bot${telegramToken}/sendMessage`, {
-          chat_id: telegramChat,
+          chat_id: telegramTarget,
           text,
           disable_web_page_preview: true,
         })
@@ -493,6 +534,7 @@ export function createMonitor(env = process.env, logger = console) {
     if (!enabled && !notifyScans) return
     started = true
     await loadState()
+    await probeChannel()
     if (!enabled) {
       logger.log('[monitor] scan alerts only, no scheduled targets')
       return
@@ -500,7 +542,7 @@ export function createMonitor(env = process.env, logger = console) {
     logger.log(
       `[monitor] ${targets.length} target(s), ${ports.length} port(s), every ${intervalMin} min` +
         `${webhookUrl ? ', webhook' : ''}${telegram ? ', telegram' : ''}` +
-        `${telegramChannel ? ' (channel)' : ''}${notifyScans ? ', scan alerts' : ''}`,
+        `${channelFound ? ' (channel)' : ''}${notifyScans ? ', scan alerts' : ''}`,
     )
     schedule()
     // First pass runs in the background so startup and health checks stay fast.
@@ -524,7 +566,7 @@ export function createMonitor(env = process.env, logger = console) {
       scanAlerts: notifyScans,
       notifyFirst,
       trace,
-      telegramChannel,
+      telegramChannel: channelFound,
       // Presence of configuration only: no values, URLs or tokens. Lets an
       // operator see which variable the running process is missing.
       env: {
@@ -547,10 +589,11 @@ export function createMonitor(env = process.env, logger = console) {
     if (!webhookUrl && !telegram) {
       return { sent: false, results: [], error: 'вебхук и Telegram не настроены' }
     }
+    await probeChannel(true)
     const results = await deliver(
       `\u2705 NETWORK//MAP \u00b7 тестовое уведомление\n` +
         `Цель: ${targets[0] || 'все сканы'} · портов: ${ports.length} · интервал: ${intervalMin} мин\n` +
-        `Куда: ${telegramChannel ? 'Telegram-канал' : telegram ? 'Telegram' : 'вебхук'}`,
+        `Куда: ${channelFound ? 'Telegram-канал' : telegram ? 'Telegram' : 'вебхук'}`,
     )
     return { sent: results.some((result) => result.ok), results }
   }
