@@ -149,6 +149,13 @@ export function MonitorPanel() {
             <span>{channels || 'только лог'}</span>
           </div>
 
+          {status.alerts.telegram && !status.telegramChannel && (
+            <p className="subdomain-note">
+              Telegram сейчас пишет в личный чат. Добавь бота администратором канала — доставка
+              переключится на канал автоматически.
+            </p>
+          )}
+
           {status.targets.length > 0 && (
             <div className="monitor-targets">
               {status.targets.map((item) => (
