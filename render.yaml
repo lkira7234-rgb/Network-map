@@ -36,6 +36,12 @@ services:
       #   value: "22,80,443,6379"
       # - key: MONITOR_INTERVAL_MIN
       #   value: "60"
+      # Alerts about every scan started in the UI are on by default; set to "0"
+      # to disable them. NOTIFY_FIRST_SCAN=1 also announces the first scan.
+      # - key: NOTIFY_SCANS
+      #   value: "1"
+      # - key: NOTIFY_FIRST_SCAN
+      #   value: "1"
       # - key: ALERT_WEBHOOK_URL
       #   sync: false
       # - key: ALERT_TELEGRAM_TOKEN
