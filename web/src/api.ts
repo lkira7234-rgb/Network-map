@@ -125,6 +125,10 @@ export interface MonitorTargetStatus {
   open: number
   added: string[]
   removed: string[]
+  nodes?: number
+  hops?: number
+  nodeAdded?: number
+  hopAdded?: number
   error: string | null
 }
 
@@ -133,6 +137,11 @@ export interface MonitorChange {
   target: string
   added: string[]
   removed: string[]
+  nodesAdded?: string[]
+  nodesRemoved?: string[]
+  hopsAdded?: string[]
+  hopsRemoved?: string[]
+  source?: string
 }
 
 export interface MonitorStatus {
@@ -140,6 +149,10 @@ export interface MonitorStatus {
   intervalMin: number
   ports: number
   alerts: { webhook: boolean; telegram: boolean }
+  scanAlerts?: boolean
+  notifyFirst?: boolean
+  trace?: boolean
+  telegramChannel?: boolean
   env?: { targets: number; telegramToken: boolean; telegramChat: boolean; webhook: boolean }
   issues?: string[]
   targets: MonitorTargetStatus[]
@@ -162,6 +175,10 @@ export async function fetchMonitor(signal?: AbortSignal): Promise<MonitorStatus>
       webhook: Boolean(data.alerts?.webhook),
       telegram: Boolean(data.alerts?.telegram),
     },
+    scanAlerts: Boolean(data.scanAlerts),
+    notifyFirst: Boolean(data.notifyFirst),
+    trace: Boolean(data.trace),
+    telegramChannel: Boolean(data.telegramChannel),
     env: data.env
       ? {
           targets: Number(data.env.targets) || 0,

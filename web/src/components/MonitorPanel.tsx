@@ -1,10 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
-import { MonitorStatus, fetchMonitor, testMonitorAlert } from '../api'
+import { MonitorChange, MonitorStatus, fetchMonitor, testMonitorAlert } from '../api'
 
 const timeOf = (value: number | null) => {
   if (!value) return '—'
   const date = new Date(value)
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+/** Short human-readable DIFF: ports keep their labels, nodes and hops are counted. */
+const diffSummary = (change: MonitorChange) => {
+  const parts: string[] = []
+  if (change.added.length) parts.push(`+${change.added.slice(0, 3).join(', ')}`)
+  if (change.removed.length) parts.push(`−${change.removed.slice(0, 3).join(', ')}`)
+  if (change.nodesAdded?.length) parts.push(`+${change.nodesAdded.length} узл.`)
+  if (change.nodesRemoved?.length) parts.push(`−${change.nodesRemoved.length} узл.`)
+  if (change.hopsAdded?.length) parts.push(`+${change.hopsAdded.length} хоп.`)
+  if (change.hopsRemoved?.length) parts.push(`−${change.hopsRemoved.length} хоп.`)
+  return parts.join(' · ')
 }
 
 /**
@@ -60,7 +72,16 @@ export function MonitorPanel() {
   }
 
   const enabled = Boolean(status?.enabled)
-  const channels = [status?.alerts.webhook ? 'WEBHOOK' : '', status?.alerts.telegram ? 'TELEGRAM' : '']
+  const scanAlerts = Boolean(status?.scanAlerts)
+  const hasChannel = Boolean(status?.alerts.webhook || status?.alerts.telegram)
+  // Without a destination scan alerts only reach the server log, so the panel
+  // stays in setup mode until a webhook or Telegram is configured.
+  const active = enabled || (scanAlerts && hasChannel)
+  const channels = [
+    status?.alerts.webhook ? 'WEBHOOK' : '',
+    status?.alerts.telegram ? (status.telegramChannel ? 'TG-КАНАЛ' : 'TELEGRAM') : '',
+    scanAlerts && hasChannel ? 'ВСЕ СКАНЫ' : '',
+  ]
     .filter(Boolean)
     .join(' · ')
 
@@ -68,8 +89,8 @@ export function MonitorPanel() {
     <section className="panel monitor">
       <div className="panel-head">
         <span>09 / PERIMETER MONITOR</span>
-        <span className={`monitor-state ${enabled ? 'on' : 'off'}`}>
-          <i /> {enabled ? 'ON' : 'OFF'}
+        <span className={`monitor-state ${active ? 'on' : 'off'}`}>
+          <i /> {active ? 'ON' : 'OFF'}
         </span>
       </div>
 
@@ -77,7 +98,15 @@ export function MonitorPanel() {
 
       {!status && !error && <p className="history-empty">Читаю состояние монитора…</p>}
 
-      {status && !enabled && (
+      {status && status.issues && status.issues.length > 0 && (
+        <ul className="monitor-issues">
+          {status.issues.map((issue) => (
+            <li key={issue}>{issue}</li>
+          ))}
+        </ul>
+      )}
+
+      {status && !active && (
         <>
           <p className="history-empty">
             Серверный мониторинг выключен. Он работает без открытой вкладки и присылает DIFF в
@@ -89,13 +118,6 @@ export function MonitorPanel() {
             <code>ALERT_WEBHOOK_URL=https://…</code>
             <code>ALERT_TELEGRAM_TOKEN=… · ALERT_TELEGRAM_CHAT=…</code>
           </div>
-          {status.issues && status.issues.length > 0 && (
-            <ul className="monitor-issues">
-              {status.issues.map((issue) => (
-                <li key={issue}>{issue}</li>
-              ))}
-            </ul>
-          )}
           {status.env && (
             <div className="monitor-env-check" title="Какие переменные видит запущенный процесс (только наличие)">
               <span className={status.env.targets > 0 ? 'on' : ''}>
@@ -119,42 +141,50 @@ export function MonitorPanel() {
         </>
       )}
 
-      {status && enabled && (
+      {status && active && (
         <>
           <div className="monitor-meta">
-            <span>интервал {status.intervalMin} мин</span>
+            <span>{status.enabled ? `интервал ${status.intervalMin} мин` : 'только алерты по сканам'}</span>
             <span>{status.ports} портов</span>
             <span>{channels || 'только лог'}</span>
           </div>
 
-          <div className="monitor-targets">
-            {status.targets.map((item) => (
-              <div className="monitor-row" key={item.target}>
-                <div className="monitor-row-head">
-                  <b>{item.target}</b>
-                  <span className="monitor-open">{item.open} откр.</span>
-                  <em title={item.lastRun ? new Date(item.lastRun).toLocaleString() : 'ещё не проверялся'}>
-                    {timeOf(item.lastRun)}
-                  </em>
-                </div>
-                {item.error ? (
-                  <span className="monitor-error">{item.error}</span>
-                ) : (
-                  <div className="monitor-diff">
-                    {item.added.length > 0 && (
-                      <span className="monitor-added">+{item.added.length} новых</span>
-                    )}
-                    {item.removed.length > 0 && (
-                      <span className="monitor-removed">−{item.removed.length} закрылись</span>
-                    )}
-                    {!item.added.length && !item.removed.length && (
-                      <span className="monitor-same">без изменений</span>
-                    )}
+          {status.targets.length > 0 && (
+            <div className="monitor-targets">
+              {status.targets.map((item) => (
+                <div className="monitor-row" key={item.target}>
+                  <div className="monitor-row-head">
+                    <b>{item.target}</b>
+                    <span className="monitor-open">{item.open} откр.</span>
+                    <em title={item.lastRun ? new Date(item.lastRun).toLocaleString() : 'ещё не проверялся'}>
+                      {timeOf(item.lastRun)}
+                    </em>
                   </div>
-                )}
-              </div>
-            ))}
-          </div>
+                  {item.error ? (
+                    <span className="monitor-error">{item.error}</span>
+                  ) : (
+                    <div className="monitor-diff">
+                      {item.added.length > 0 && (
+                        <span className="monitor-added">+{item.added.length} новых</span>
+                      )}
+                      {item.removed.length > 0 && (
+                        <span className="monitor-removed">−{item.removed.length} закрылись</span>
+                      )}
+                      {Boolean(item.nodeAdded) && (
+                        <span className="monitor-added">+{item.nodeAdded} узл.</span>
+                      )}
+                      {Boolean(item.hopAdded) && (
+                        <span className="monitor-added">+{item.hopAdded} хоп.</span>
+                      )}
+                      {!item.added.length && !item.removed.length && !item.nodeAdded && !item.hopAdded && (
+                        <span className="monitor-same">без изменений</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
           {status.history.length > 0 && (
             <div className="monitor-history">
@@ -163,11 +193,7 @@ export function MonitorPanel() {
                 <div className="monitor-change" key={`${change.at}-${change.target}`}>
                   <em>{timeOf(change.at)}</em>
                   <b>{change.target}</b>
-                  <span>
-                    {change.added.length ? `+${change.added.slice(0, 3).join(', ')}` : ''}
-                    {change.added.length && change.removed.length ? ' · ' : ''}
-                    {change.removed.length ? `−${change.removed.slice(0, 3).join(', ')}` : ''}
-                  </span>
+                  <span>{diffSummary(change)}</span>
                 </div>
               ))}
             </div>
@@ -177,8 +203,8 @@ export function MonitorPanel() {
             type="button"
             className="btn ghost small monitor-test"
             onClick={() => void runTest()}
-            disabled={!channels || test.status === 'busy'}
-            title={channels ? 'Отправить тестовое уведомление в настроенные каналы' : 'Сначала задай вебхук или Telegram в окружении'}
+            disabled={!hasChannel || test.status === 'busy'}
+            title={hasChannel ? 'Отправить тестовое уведомление в настроенные каналы' : 'Сначала задай вебхук или Telegram в окружении'}
           >
             {test.status === 'busy' ? <span className="spinner" /> : '⌁'} ТЕСТ УВЕДОМЛЕНИЯ
           </button>
@@ -188,8 +214,10 @@ export function MonitorPanel() {
           )}
 
           <p className="subdomain-note">
-            Скан идёт на сервере по расписанию; уведомление уходит только при изменении набора
-            открытых портов. Состояние хранится на диске сервера.
+            {status.enabled
+              ? 'Скан идёт на сервере по расписанию; уведомление уходит только при изменении узлов, открытых портов или хопов.'
+              : 'Сканы из интерфейса сравниваются с прошлым снимком; уведомление уходит только при изменении узлов, портов или хопов.'}{' '}
+            Состояние хранится на диске сервера.
           </p>
         </>
       )}

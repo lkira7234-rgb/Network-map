@@ -183,6 +183,7 @@ app.post('/api/scan', async (req, res) => {
   }
 
   activeScans++
+  const observed = { nodes: new Set(), ports: new Set(), hops: new Set(), labels: {}, done: false }
   try {
     await streamNdjson(res, (emit, signal) =>
       runScan(
@@ -194,12 +195,35 @@ app.post('/api/scan', async (req, res) => {
           udp: req.body?.udp === true,
           timeout: req.body?.timeout,
         },
-        emit,
+        (event) => {
+          if (event.type === 'ip' && event.ip) observed.nodes.add(String(event.ip))
+          else if (event.type === 'hop' && event.ip) {
+            observed.hops.add(`${event.index} · ${event.ip}`)
+          } else if (event.type === 'port' && event.state === 'open') {
+            const key = `${event.ip}:${event.port}/${event.protocol || 'tcp'}`
+            observed.ports.add(key)
+            observed.labels[key] = event.service || 'unknown'
+          } else if (event.type === 'done') observed.done = true
+          emit(event)
+        },
         signal,
       ),
     )
   } finally {
     activeScans--
+  }
+
+  // Alerts are best-effort: a Telegram outage must never break the scan stream.
+  if (observed.done) {
+    monitor
+      .observeScan({
+        target,
+        nodes: [...observed.nodes],
+        ports: [...observed.ports],
+        hops: [...observed.hops],
+        labels: observed.labels,
+      })
+      .catch((error) => console.warn(`[scan-alert] ${error?.message || error}`))
   }
 })
 
@@ -232,7 +256,7 @@ app.get('/api/monitor', (req, res) => {
 })
 
 app.post('/api/monitor/test', async (req, res) => {
-  if (!monitor.enabled) {
+  if (!monitor.enabled && !monitor.notifyScans) {
     res.status(400).json({ error: 'Мониторинг не настроен на сервере.' })
     return
   }
