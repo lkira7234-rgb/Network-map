@@ -50,6 +50,7 @@ export function createTelegramBot({ token, monitor, env = process.env, logger = 
     try {
       const raw = JSON.parse(await fs.readFile(stateFile, 'utf8'))
       state.offset = Number(raw?.offset) || 0
+      if (raw?.channel) monitor.setTelegramChannel(raw.channel)
       for (const [chatId, value] of Object.entries(raw?.chats || {})) {
         const hosts = []
         for (const host of Array.isArray(value?.targets) ? value.targets : []) {
@@ -72,6 +73,7 @@ export function createTelegramBot({ token, monitor, env = process.env, logger = 
         JSON.stringify({
           v: 1,
           offset: state.offset,
+          channel: monitor.channelId() || undefined,
           chats: Object.fromEntries(
             Object.entries(state.chats).map(([chatId, value]) => [
               chatId,

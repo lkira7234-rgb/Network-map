@@ -385,6 +385,10 @@ export function createMonitor(env = process.env, logger = console) {
     return dynamicTargets.size
   }
 
+  function channelId() {
+    return channelFound ? telegramTarget : null
+  }
+
   function useExternalChannelDiscovery() {
     externalDiscovery = true
   }
@@ -758,6 +762,7 @@ export function createMonitor(env = process.env, logger = console) {
     hasTarget,
     resolveHost,
     dynamicCount,
+    channelId,
     primeTarget,
     useExternalChannelDiscovery,
     setTelegramChannel,
