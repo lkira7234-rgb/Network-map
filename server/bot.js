@@ -296,9 +296,11 @@ export function createTelegramBot({ token, monitor, env = process.env, logger = 
     if (!enabled || loop) return
     await load()
     stopped = false
-    loop = poll().finally(() => {
-      loop = null
-    })
+    loop = poll()
+      .catch((error) => logger.warn(`[bot] stopped: ${error?.message || error}`))
+      .finally(() => {
+        loop = null
+      })
   }
 
   async function stop() {
