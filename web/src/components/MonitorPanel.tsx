@@ -173,12 +173,21 @@ export function MonitorPanel() {
                       {Boolean(item.nodeAdded) && (
                         <span className="monitor-added">+{item.nodeAdded} узл.</span>
                       )}
+                      {Boolean(item.nodeRemoved) && (
+                        <span className="monitor-removed">−{item.nodeRemoved} узл.</span>
+                      )}
                       {Boolean(item.hopAdded) && (
                         <span className="monitor-added">+{item.hopAdded} хоп.</span>
                       )}
-                      {!item.added.length && !item.removed.length && !item.nodeAdded && !item.hopAdded && (
-                        <span className="monitor-same">без изменений</span>
+                      {Boolean(item.hopRemoved) && (
+                        <span className="monitor-removed">−{item.hopRemoved} хоп.</span>
                       )}
+                      {!item.added.length &&
+                        !item.removed.length &&
+                        !item.nodeAdded &&
+                        !item.nodeRemoved &&
+                        !item.hopAdded &&
+                        !item.hopRemoved && <span className="monitor-same">без изменений</span>}
                     </div>
                   )}
                 </div>

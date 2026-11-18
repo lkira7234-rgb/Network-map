@@ -128,7 +128,9 @@ export interface MonitorTargetStatus {
   nodes?: number
   hops?: number
   nodeAdded?: number
+  nodeRemoved?: number
   hopAdded?: number
+  hopRemoved?: number
   error: string | null
 }
 

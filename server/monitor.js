@@ -212,7 +212,9 @@ export function createMonitor(env = process.env, logger = console) {
         added: [],
         removed: [],
         nodeAdded: 0,
+        nodeRemoved: 0,
         hopAdded: 0,
+        hopRemoved: 0,
         error: null,
       },
     ]),
@@ -362,7 +364,9 @@ export function createMonitor(env = process.env, logger = console) {
       entry.added = change.added
       entry.removed = change.removed
       entry.nodeAdded = change.nodesAdded.length
+      entry.nodeRemoved = change.nodesRemoved.length
       entry.hopAdded = change.hopsAdded.length
+      entry.hopRemoved = change.hopsRemoved.length
       entry.nextRun = started ? at + intervalMin * 60_000 : null
     }
 
