@@ -89,6 +89,22 @@ export interface IpEntry {
   http?: (HttpInfo & { port: number }) | null
   /** Every HTTP probe for this IP, so multiple web ports do not overwrite each other. */
   httpAll?: (HttpInfo & { port: number })[]
+  /** AbuseIPDB score; null when the feature is disabled or the lookup failed. */
+  reputation?: ReputationInfo | null
+}
+
+export interface ReputationInfo {
+  score: number
+  totalReports?: number
+  distinctUsers?: number
+  lastReportedAt?: string | null
+  country?: string | null
+  usageType?: string | null
+  isp?: string | null
+  domain?: string | null
+  whitelisted?: boolean
+  source?: string
+  cached?: boolean
 }
 
 export interface HopInfo {
@@ -276,6 +292,14 @@ export interface SelectionAction {
   hint?: string
 }
 
+/** External OSINT or leak-registry link. Values are built locally. */
+export interface LinkRef {
+  id: string
+  label: string
+  url: string
+  hint?: string
+}
+
 export interface SelectionDetails {
   eyebrow: string
   title: string
@@ -289,6 +313,12 @@ export interface SelectionDetails {
   tech?: TechHit[]
   packet?: PacketTrace
   actions?: SelectionAction[]
+  /** IP/domain context used by OSINT, PoC and screenshot panels. */
+  ip?: string
+  domain?: string
+  reputation?: ReputationInfo | null
+  osint?: LinkRef[]
+  leaks?: LinkRef[]
 }
 
 /* ------------------------------------------------------------------ */
@@ -346,6 +376,7 @@ export type ScanEvent =
   | { type: 'ptr'; ip: string; ptr: string }
   | { type: 'geo'; ip: string; geo: GeoInfo }
   | { type: 'port'; ip: string; port: number; protocol?: Protocol; state: PortState; rtt?: number; service?: string | null; banner?: string; error?: string }
+  | { type: 'reputation'; ip: string; reputation: ReputationInfo }
   | { type: 'tls'; ip: string; port: number } & TlsInfo
   | { type: 'http'; ip: string; port: number } & HttpInfo
   | { type: 'hop'; index: number; ip: string | null; rtt: number | null; timeout?: boolean }

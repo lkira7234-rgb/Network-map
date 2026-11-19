@@ -21,6 +21,7 @@ import {
 import { matchCvesForPort } from './cve'
 import { findingsForIp, findingsForPort } from './checks'
 import { techForHttp, techForIp } from './tech'
+import { leakLinks, osintLinks } from './osint'
 
 let logId = 0
 
@@ -164,6 +165,10 @@ export function scanReducer(state: ScanState, action: ScanAction): ScanState {
       const next = { ...state, ips }
       const label = `${event.ip}:${event.port}${protocol === 'udp' ? '/udp' : ''}`
       return event.state === 'open' && !prev ? log(next, 'open', `${label} OPEN`) : next
+    }
+
+    case 'reputation': {
+      return { ...state, ips: patchIp(state, event.ip, { reputation: event.reputation }) }
     }
 
     case 'tls': {
@@ -716,6 +721,8 @@ export function getSelectionDetails(state: ScanState, selection: Selection): Sel
       color: '#ff2fd6',
       rows,
       block,
+      domain: state.host || '',
+      leaks: state.host && !/^[0-9.]+$/.test(state.host) ? leakLinks(state.host) : [],
     }
   }
 
@@ -731,6 +738,7 @@ export function getSelectionDetails(state: ScanState, selection: Selection): Sel
       { label: 'ISP', value: ip.geo?.isp || '—' },
       { label: 'ASN', value: ip.geo?.asn || '—' },
       { label: 'TTL', value: ip.ttl != null ? `${ip.ttl}s` : '—' },
+      { label: 'ABUSEIPDB', value: ip.reputation ? `${ip.reputation.score}%` : '—' },
       { label: 'ПОРТЫ', value: `${counts.open} open · ${counts.closed} closed · ${counts.filtered} filtered` },
     ]
     const block = ip.tls
@@ -763,6 +771,9 @@ export function getSelectionDetails(state: ScanState, selection: Selection): Sel
       color: '#38f6ff',
       rows,
       block,
+      ip: ip.ip,
+      reputation: ip.reputation ?? null,
+      osint: osintLinks(ip.ip),
       findings: findingsForIp(ip, state.host || state.target || ''),
       tech: techForIp(ip),
       packet: packetFor(ip, state.host || state.target || ''),
@@ -839,6 +850,9 @@ export function getSelectionDetails(state: ScanState, selection: Selection): Sel
             : '#49ff9e',
       rows,
       block: tlsBlock,
+      ip: ip.ip,
+      reputation: ip.reputation ?? null,
+      osint: osintLinks(ip.ip),
       findings: findingsForPort(ip, port, state.host || state.target || ''),
       cves: matchCvesForPort(ip, port),
       tech: httpEntries(ip).find((entry) => entry.port === port.port)

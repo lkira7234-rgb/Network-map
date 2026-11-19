@@ -175,7 +175,7 @@ async function postJson(url, body, timeoutMs = 8000) {
   }
 }
 
-export function createMonitor(env = process.env, logger = console) {
+export function createMonitor(env = process.env, logger = console, store = null) {
   const envTargets = readTargets(env.MONITOR_TARGETS)
   const { ports, invalid: invalidPorts } = readPorts(env.MONITOR_PORTS)
   const intervalMin = Math.max(MIN_INTERVAL_MIN, Number(env.MONITOR_INTERVAL_MIN) || 60)
@@ -263,9 +263,14 @@ export function createMonitor(env = process.env, logger = console) {
 
   async function loadState() {
     try {
-      const raw = await fs.readFile(stateFile, 'utf8')
-      const parsed = JSON.parse(raw)
-      for (const [target, value] of Object.entries(parsed?.targets || {})) {
+      const rows = store
+        ? store.monitorSnapshots()
+        : Object.entries(
+            (JSON.parse(await fs.readFile(stateFile, 'utf8'))?.targets || {}),
+          ).map(([target, snapshot]) => ({ target, snapshot }))
+      for (const row of rows) {
+        const target = row.target
+        const value = row.snapshot
         if (!Array.isArray(value?.open)) continue
         const snapshot = {
           at: Number(value.at) || 0,
@@ -285,11 +290,23 @@ export function createMonitor(env = process.env, logger = console) {
 
   async function saveState() {
     try {
+      if (store) {
+        for (const [target, value] of snapshots) store.saveMonitorSnapshot(target, value)
+        return
+      }
       const payload = { savedAt: Date.now(), targets: {} }
       for (const [target, value] of snapshots) payload.targets[target] = value
       await fs.writeFile(stateFile, JSON.stringify(payload), 'utf8')
     } catch {
       // Ephemeral filesystem or read-only disk: ignore.
+    }
+  }
+
+  function recordScan(record) {
+    try {
+      store?.addScan({ at: Date.now(), ...record })
+    } catch (error) {
+      logger.warn(`[monitor] scan history: ${error?.message || error}`)
     }
   }
 
@@ -517,6 +534,18 @@ export function createMonitor(env = process.env, logger = console) {
       await saveState()
     }
 
+    if (!error) {
+      recordScan({
+        target,
+        source: 'monitor',
+        nodes,
+        ports: open,
+        hops,
+        labels,
+        error: null,
+      })
+    }
+
     if (entry) {
       entry.lastRun = at
       entry.error = error
@@ -703,17 +732,25 @@ export function createMonitor(env = process.env, logger = console) {
     timer = null
   }
 
-  function publicStatus() {
+  /** Compact status safe for anonymous visitors: no targets and no history. */
+  function publicSummary() {
     return {
       enabled: isEnabled(),
       intervalMin,
       ports: ports.length,
       alerts: { webhook: Boolean(webhookUrl), telegram },
       scanAlerts: notifyScans,
-      notifyFirst,
-      trace,
       telegramChannel: channelFound,
       botTargets: dynamicTargets.size,
+      updatedAt: Date.now(),
+    }
+  }
+
+  function publicStatus() {
+    return {
+      ...publicSummary(),
+      notifyFirst,
+      trace,
       // Presence of configuration only: no values, URLs or tokens. Lets an
       // operator see which variable the running process is missing.
       env: {
@@ -757,6 +794,7 @@ export function createMonitor(env = process.env, logger = console) {
     observeScan,
     sendTest,
     publicStatus,
+    publicSummary,
     addTarget,
     removeTarget,
     hasTarget,

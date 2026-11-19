@@ -118,6 +118,49 @@ export interface SubdomainResponse {
   cached?: boolean
 }
 
+export type GarbageKind = 'auto' | 'site' | 'dns' | 'ip'
+
+export interface GarbagePick {
+  ok: boolean
+  kind?: GarbageKind
+  target?: string
+  pickedAt?: number
+  error?: string
+  verify?: {
+    http?: number
+    title?: string | null
+    bytes?: number
+    finalHost?: string
+    server?: string | null
+    ms?: number
+    ip?: string
+    port?: number
+    domain?: string
+    ns?: string
+    tcp53?: boolean
+    reason?: string
+  }
+  meta?: Record<string, unknown>
+}
+
+export async function fetchGarbage(kind: GarbageKind, signal?: AbortSignal): Promise<GarbagePick> {
+  const response = await fetch(`${API_BASE}/api/garbage?kind=${encodeURIComponent(kind)}`, {
+    signal,
+    headers: { Accept: 'application/json' },
+  })
+  await assertOk(response)
+  const data = (await response.json()) as GarbagePick
+  return {
+    ok: Boolean(data.ok),
+    kind: data.kind,
+    target: typeof data.target === 'string' ? data.target : undefined,
+    pickedAt: Number(data.pickedAt) || undefined,
+    error: typeof data.error === 'string' ? data.error : undefined,
+    verify: data.verify,
+    meta: data.meta,
+  }
+}
+
 export interface MonitorTargetStatus {
   target: string
   source?: 'env' | 'bot'
@@ -157,19 +200,30 @@ export interface MonitorStatus {
   trace?: boolean
   telegramChannel?: boolean
   botTargets?: number
+  admin?: boolean
   bot?: { enabled: boolean; polling: boolean; chats: number; targets: number; maxPerChat: number }
   env?: { targets: number; telegramToken: boolean; telegramChat: boolean; webhook: boolean }
   issues?: string[]
   targets: MonitorTargetStatus[]
   history: MonitorChange[]
+  scans?: StoreScan[]
   hint?: string | null
 }
 
-export async function fetchMonitor(signal?: AbortSignal): Promise<MonitorStatus> {
-  const response = await fetch(`${API_BASE}/api/monitor`, {
-    signal,
-    headers: { Accept: 'application/json' },
-  })
+export interface StoreScan {
+  at: number
+  target: string
+  source?: string
+  nodes?: string[]
+  ports?: string[]
+  hops?: string[]
+  labels?: Record<string, string>
+}
+
+export async function fetchMonitor(signal?: AbortSignal, token?: string): Promise<MonitorStatus> {
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (token) headers['X-Monitor-Token'] = token
+  const response = await fetch(`${API_BASE}/api/monitor`, { signal, headers })
   await assertOk(response)
   const data = (await response.json()) as MonitorStatus
   return {
@@ -185,6 +239,7 @@ export async function fetchMonitor(signal?: AbortSignal): Promise<MonitorStatus>
     trace: Boolean(data.trace),
     telegramChannel: Boolean(data.telegramChannel),
     botTargets: Number(data.botTargets) || 0,
+    admin: Boolean(data.admin),
     bot: data.bot
       ? {
           enabled: Boolean(data.bot.enabled),
@@ -205,13 +260,81 @@ export async function fetchMonitor(signal?: AbortSignal): Promise<MonitorStatus>
     issues: Array.isArray(data.issues) ? data.issues.map(String) : [],
     targets: Array.isArray(data.targets) ? data.targets : [],
     history: Array.isArray(data.history) ? data.history : [],
+    scans: Array.isArray(data.scans) ? data.scans : undefined,
     hint: data.hint ?? null,
   }
 }
 
-export async function testMonitorAlert(): Promise<void> {
-  const response = await fetch(`${API_BASE}/api/monitor/test`, { method: 'POST' })
+export async function testMonitorAlert(token?: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/monitor/test`, {
+    method: 'POST',
+    headers: token ? { 'X-Monitor-Token': token } : {},
+  })
   await assertOk(response)
+}
+
+/* ------------------------------------------------------------------ */
+/*  preview & reputation                                               */
+/* ------------------------------------------------------------------ */
+
+export interface PreviewResponse {
+  ok: boolean
+  status?: number
+  image?: string
+  url?: string
+  title?: string | null
+  ms?: number
+  cached?: boolean
+  error?: string
+  hint?: string
+  available?: boolean
+  enabled?: boolean
+  engine?: string | null
+  ports?: number[]
+}
+
+export async function fetchPreview(host: string, port: number, signal?: AbortSignal): Promise<PreviewResponse> {
+  const response = await fetch(
+    `${API_BASE}/api/preview?host=${encodeURIComponent(host)}&port=${encodeURIComponent(String(port))}`,
+    { signal, headers: { Accept: 'application/json' } },
+  )
+  let data: Partial<PreviewResponse> = {}
+  try {
+    data = (await response.json()) as PreviewResponse
+  } catch {}
+  return {
+    ...data,
+    ok: Boolean(data.ok) && response.ok,
+    status: response.status,
+  }
+}
+
+export interface ReputationResponse {
+  ok: boolean
+  enabled: boolean
+  ip?: string
+  reputation?: import('./types').ReputationInfo
+  error?: string
+  reason?: string
+}
+
+export async function fetchReputation(ip: string, signal?: AbortSignal): Promise<ReputationResponse> {
+  const response = await fetch(`${API_BASE}/api/reputation?ip=${encodeURIComponent(ip)}`, {
+    signal,
+    headers: { Accept: 'application/json' },
+  })
+  let data: Partial<ReputationResponse> = {}
+  try {
+    data = (await response.json()) as ReputationResponse
+  } catch {}
+  return {
+    ok: Boolean(data.ok) && response.ok,
+    enabled: Boolean(data.enabled),
+    ip: data.ip,
+    reputation: data.reputation,
+    error: data.error,
+    reason: data.reason,
+  }
 }
 
 export async function fetchSubdomains(host: string, signal?: AbortSignal): Promise<SubdomainResponse> {

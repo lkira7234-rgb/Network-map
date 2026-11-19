@@ -1,12 +1,17 @@
 import express from 'express'
 import path from 'node:path'
 import fs from 'node:fs'
+import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { runScan, normalizeTarget } from './scan.js'
 import { runDemo } from './demo.js'
 import { createMonitor } from './monitor.js'
 import { createTelegramBot } from './bot.js'
+import { createGarbage } from './garbage.js'
 import { createRateLimiter } from './rate-limit.js'
+import { createStore } from './store.js'
+import { createReputation } from './reputation.js'
+import { createPreview } from './preview.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const distDir = path.resolve(__dirname, '..', 'dist')
@@ -23,6 +28,18 @@ const DEMO_LIMIT = Math.max(1, Number(process.env.DEMO_LIMIT) || 10)
 const scanLimiter = createRateLimiter({ limit: SCAN_LIMIT, windowMs: SCAN_WINDOW_MS })
 const demoLimiter = createRateLimiter({ limit: DEMO_LIMIT, windowMs: SCAN_WINDOW_MS })
 const subLimiter = createRateLimiter({ limit: 20, windowMs: SCAN_WINDOW_MS })
+const garbageLimiter = createRateLimiter({
+  limit: Math.max(1, Number(process.env.GARBAGE_LIMIT) || 12),
+  windowMs: SCAN_WINDOW_MS,
+})
+const previewLimiter = createRateLimiter({ limit: 8, windowMs: SCAN_WINDOW_MS })
+const reputationLimiter = createRateLimiter({ limit: 30, windowMs: SCAN_WINDOW_MS })
+const MAX_ACTIVE_PICKS = Math.max(1, Number(process.env.MAX_ACTIVE_PICKS) || 3)
+
+const store = createStore()
+const reputation = createReputation(process.env, store)
+const preview = createPreview(process.env, store)
+const MONITOR_TOKEN = String(process.env.MONITOR_TOKEN || '').trim()
 
 // crt.sh is slow and rate-sensitive, so a short server-side cache keeps repeat
 // lookups instant and polite.
@@ -145,6 +162,29 @@ function sendRateLimited(res, limit) {
   })
 }
 
+/* ------------------------------------------------------------------ */
+/*  monitor auth                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Constant-time comparison for the operator token. An empty MONITOR_TOKEN
+ * disables the management endpoints entirely (they answer 404, like any
+ * unknown route) so a misconfigured deploy never exposes them publicly.
+ */
+function monitorAuthorized(req) {
+  if (!MONITOR_TOKEN) return false
+  const provided = Buffer.from(String(req.get('x-monitor-token') || ''))
+  const expected = Buffer.from(MONITOR_TOKEN)
+  if (provided.length !== expected.length) return false
+  return crypto.timingSafeEqual(provided, expected)
+}
+
+function requireMonitorToken(req, res) {
+  if (monitorAuthorized(req)) return true
+  res.status(404).json({ error: 'API endpoint not found' })
+  return false
+}
+
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
@@ -152,6 +192,8 @@ app.get('/api/health', (req, res) => {
     time: new Date().toISOString(),
     platform: process.platform,
     activeScans,
+    storage: store.kind,
+    preview: preview.publicStatus().available,
   })
 })
 
@@ -186,8 +228,10 @@ app.post('/api/scan', async (req, res) => {
   activeScans++
   const observed = { nodes: new Set(), ports: new Set(), hops: new Set(), labels: {}, done: false }
   try {
-    await streamNdjson(res, (emit, signal) =>
-      runScan(
+    await streamNdjson(res, async (emit, signal) => {
+      const reputationJobs = []
+      const reputationAsked = new Set()
+      await runScan(
         {
           target,
           ports: req.body?.ports,
@@ -206,16 +250,46 @@ app.post('/api/scan', async (req, res) => {
             observed.labels[key] = event.service || 'unknown'
           } else if (event.type === 'done') observed.done = true
           emit(event)
+
+          // Reputation is optional and slow: look it up in parallel while the
+          // stream is open, then emit one extra event per resolved node.
+          if (event.type === 'ip' && event.ip && reputation.enabled && !reputationAsked.has(event.ip)) {
+            reputationAsked.add(event.ip)
+            reputationJobs.push(
+              reputation
+                .lookup(event.ip)
+                .then((data) => {
+                  if (data) emit({ type: 'reputation', ip: event.ip, reputation: data })
+                })
+                .catch(() => {}),
+            )
+          }
         },
         signal,
-      ),
-    )
+      )
+      // Keep the NDJSON response open until the reputation events are flushed.
+      if (reputationJobs.length) await Promise.allSettled(reputationJobs)
+    })
   } finally {
     activeScans--
   }
 
-  // Alerts are best-effort: a Telegram outage must never break the scan stream.
+  // Local scan history and alerts are best-effort: a storage or Telegram
+  // outage must never break the stream that already finished successfully.
   if (observed.done) {
+    try {
+      store.addScan({
+        target,
+        source: 'ui',
+        at: Date.now(),
+        nodes: [...observed.nodes],
+        ports: [...observed.ports],
+        hops: [...observed.hops],
+        labels: observed.labels,
+      })
+    } catch (error) {
+      console.warn(`[scan-history] ${error?.message || error}`)
+    }
     monitor
       .observeScan({
         target,
@@ -239,10 +313,51 @@ app.get('/api/demo', async (req, res) => {
 })
 
 /* ------------------------------------------------------------------ */
+/*  garbage mode: a random target that is actually alive               */
+/* ------------------------------------------------------------------ */
+
+const garbage = createGarbage()
+let activePicks = 0
+
+app.get('/api/garbage', async (req, res) => {
+  const requested = String(req.query.kind || 'auto').toLowerCase()
+  const kind = ['auto', 'site', 'dns', 'ip'].includes(requested) ? requested : 'auto'
+
+  const limit = garbageLimiter.take(req.ip)
+  setRateLimitHeaders(res, limit)
+  if (!limit.ok) {
+    sendRateLimited(res, limit)
+    return
+  }
+
+  if (activePicks >= MAX_ACTIVE_PICKS) {
+    res.setHeader('Retry-After', '5')
+    res.status(429).json({ ok: false, error: 'Слишком много поисков цели. Попробуй через пару секунд.' })
+    return
+  }
+
+  res.setHeader('Cache-Control', 'no-store')
+  activePicks++
+  try {
+    const result = await garbage.pick(kind)
+    res.json(result)
+  } catch (error) {
+    res.status(502).json({ ok: false, error: error?.message || 'Не удалось найти случайную цель' })
+  } finally {
+    activePicks--
+  }
+})
+
+app.get('/api/garbage/info', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store')
+  res.json(garbage.publicStatus())
+})
+
+/* ------------------------------------------------------------------ */
 /*  perimeter monitor                                                  */
 /* ------------------------------------------------------------------ */
 
-const monitor = createMonitor()
+const monitor = createMonitor(process.env, console, store)
 const bot = createTelegramBot({
   token: String(process.env.ALERT_TELEGRAM_TOKEN || '').trim(),
   monitor,
@@ -252,18 +367,28 @@ const MONITOR_TEST_COOLDOWN_MS = 10 * 60_000
 
 app.get('/api/monitor', (req, res) => {
   res.setHeader('Cache-Control', 'no-store')
+  const admin = monitorAuthorized(req)
+  // Anonymous visitors only get the compressed status: no targets, no history
+  // and no environment diagnostics.
+  const base = admin ? monitor.publicStatus() : monitor.publicSummary()
+  const hint = monitor.enabled
+    ? null
+    : bot.publicStatus().enabled
+      ? 'Целей пока нет: пришли сайт боту в личные сообщения или задай MONITOR_TARGETS в окружении.'
+      : 'Мониторинг выключен. Задай MONITOR_TARGETS и (по желанию) ALERT_WEBHOOK_URL или ALERT_TELEGRAM_TOKEN + ALERT_TELEGRAM_CHAT в окружении сервера.'
   res.json({
-    ...monitor.publicStatus(),
+    ...base,
+    admin,
     bot: bot.publicStatus(),
-    hint: monitor.enabled
-      ? null
-      : bot.enabled
-        ? 'Целей пока нет: пришли сайт боту в личные сообщения или задай MONITOR_TARGETS в окружении.'
-        : 'Мониторинг выключен. Задай MONITOR_TARGETS и (по желанию) ALERT_WEBHOOK_URL или ALERT_TELEGRAM_TOKEN + ALERT_TELEGRAM_CHAT в окружении сервера.',
+    targets: admin ? base.targets || [] : [],
+    history: admin ? base.history || [] : [],
+    scans: admin ? store.scans(12) : undefined,
+    hint,
   })
 })
 
 app.post('/api/monitor/test', async (req, res) => {
+  if (!requireMonitorToken(req, res)) return
   if (!monitor.enabled && !monitor.notifyScans) {
     res.status(400).json({ error: 'Мониторинг не настроен на сервере.' })
     return
@@ -292,15 +417,65 @@ app.post('/api/monitor/test', async (req, res) => {
 })
 
 // External cron hook (e.g. GitHub Actions) for hosts that sleep when idle.
-// It only works when the operator sets a long random MONITOR_TOKEN.
+// Protected by MONITOR_TOKEN: without a matching X-Monitor-Token the route is
+// indistinguishable from a missing endpoint.
 app.post('/api/monitor/run', async (req, res) => {
-  const token = String(process.env.MONITOR_TOKEN || '')
-  if (!token || req.get('x-monitor-token') !== token) {
-    res.status(404).json({ error: 'API endpoint not found' })
-    return
-  }
+  if (!requireMonitorToken(req, res)) return
   const result = await monitor.runNow()
   res.json({ ok: true, ...result })
+})
+
+/* ------------------------------------------------------------------ */
+/*  headless web preview                                               */
+/* ------------------------------------------------------------------ */
+
+app.get('/api/preview', async (req, res) => {
+  const limit = previewLimiter.take(req.ip)
+  setRateLimitHeaders(res, limit)
+  if (!limit.ok) {
+    sendRateLimited(res, limit)
+    return
+  }
+
+  res.setHeader('Cache-Control', 'no-store')
+  const result = await preview.capture(req.query.host, req.query.port)
+  res.status(result.ok ? 200 : result.status || 502).json(result)
+})
+
+/* ------------------------------------------------------------------ */
+/*  IP reputation (AbuseIPDB, optional)                                */
+/* ------------------------------------------------------------------ */
+
+app.get('/api/reputation', async (req, res) => {
+  const ip = String(req.query.ip || '').trim()
+  if (!ip) {
+    res.status(400).json({ ok: false, enabled: reputation.enabled, error: 'Укажи IP' })
+    return
+  }
+
+  const limit = reputationLimiter.take(req.ip)
+  setRateLimitHeaders(res, limit)
+  if (!limit.ok) {
+    sendRateLimited(res, limit)
+    return
+  }
+
+  res.setHeader('Cache-Control', 'no-store')
+  if (!reputation.enabled) {
+    res.json({ ok: false, enabled: false, reason: 'ABUSEIPDB_API_KEY не задан на сервере' })
+    return
+  }
+
+  try {
+    const data = await reputation.lookup(ip)
+    if (!data) {
+      res.status(502).json({ ok: false, enabled: true, error: 'Репутация недоступна' })
+      return
+    }
+    res.json({ ok: true, enabled: true, ip, reputation: data })
+  } catch (error) {
+    res.status(502).json({ ok: false, enabled: true, error: error?.message || 'Ошибка AbuseIPDB' })
+  }
 })
 
 /* ------------------------------------------------------------------ */
@@ -441,10 +616,14 @@ app.use((err, req, res, next) => {
   res.status(err?.status || 500).json({ error: err?.message || 'Internal error' })
 })
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`\n  NETWORK//MAP server  →  http://${HOST}:${PORT}`)
   console.log(`  API                 →  POST /api/scan · GET /api/demo`)
-  console.log(`  Limits              →  ${SCAN_LIMIT} scans/${Math.round(SCAN_WINDOW_MS / 1000)}s per IP · ${MAX_ACTIVE_SCANS} concurrent\n`)
+  console.log(`  Limits              →  ${SCAN_LIMIT} scans/${Math.round(SCAN_WINDOW_MS / 1000)}s per IP · ${MAX_ACTIVE_SCANS} concurrent`)
+  console.log(
+    `  Storage             →  ${store.kind} · preview ${preview.publicStatus().available ? 'on' : 'off'}` +
+      ` · reputation ${reputation.enabled ? 'on' : 'off'} · monitor token ${MONITOR_TOKEN ? 'on' : 'off'}\n`,
+  )
   // The bot can receive new sites at any time, so it starts even when the
   // hourly monitor is idle; monitor.start() is a no-op in that case.
   monitor
@@ -452,3 +631,32 @@ app.listen(PORT, HOST, () => {
     .then(() => bot.start())
     .catch((error) => console.warn(`[monitor] start failed: ${error?.message || error}`))
 })
+
+let shuttingDown = false
+function shutdown(signal) {
+  if (shuttingDown) return
+  shuttingDown = true
+  console.log(`[server] ${signal} · shutting down`)
+  try {
+    monitor.stop()
+  } catch {}
+  try {
+    preview.close()
+  } catch {}
+  server.close(() => {
+    try {
+      store.close()
+    } catch {}
+    process.exit(0)
+  })
+  // Render sends SIGTERM and waits; never hang the deploy on a stuck socket.
+  setTimeout(() => {
+    try {
+      store.close()
+    } catch {}
+    process.exit(0)
+  }, 5000).unref?.()
+}
+
+process.once('SIGTERM', () => shutdown('SIGTERM'))
+process.once('SIGINT', () => shutdown('SIGINT'))

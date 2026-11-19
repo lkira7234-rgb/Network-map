@@ -39,6 +39,39 @@
 
 ![Network Map — real scan](docs/live-scan.png)
 
+## Разведка и мониторинг
+
+- **Trash Mode**: кнопка `♻ НАЙТИ И СКАНУЛЯТЬ` выбирает случайную живую цель — сайт, DNS-сервер или публичный IP. Кандидаты проверяются по HTTP-контенту, поэтому парковки (`domain for sale`, `buy this domain`, `index of /`, `welcome to nginx`, `parking`) отбрасываются. Запуск сопровождается облаком мусора и кинематографичным warp-пролётом к найденному узлу.
+- **Скриншоты веб-портов**: сервер в фоне снимает превью `80/443/8080/8443` headless-браузером (таймаут 5 с, кэш 6 ч) и показывает его в инспекторе. При отсутствии браузера или нехватке системных библиотек блок просто скрывается, сканы продолжают работать.
+- **OSINT по IP**: Shodan, Censys, VirusTotal и GreyNoise открываются в новой вкладке (`rel="noopener"`), запросы идут напрямую из браузера.
+- **AbuseIPDB**: шкала 0–100 % в инспекторе IP, кэш 24 часа в SQLite. Выше 50 % — предупреждение и «ядовитый» цвет узла. Работает только при заданном `ABUSEIPDB_API_KEY`.
+- **Безопасный PoC**: кнопка `⚡ СГЕНЕРИРОВАТЬ PoC` собирает `curl`/Python/`nmap`-команды, которые только читают баннеры и заголовки для конкретного хоста и порта. Эксплойтов в генераторе нет.
+- **Copy Markdown**: экспорт отчёта в Markdown с таблицами портов, TLS, HTTP, CVE, находок, DNS, маршрута и тех-стека — для Obsidian и Notion.
+- **Search Leaks**: ссылки на HIBP, DeHashed, Intelligence X, LeakCheck, BreachDirectory, LeakIX и PSBDMP по домену из `OBJECT SUMMARY`.
+- **SOUND: ON/OFF**: синтезированный Web Audio ambient, клики, звук открытого порта, сигнал Critical/High и warp. Настройка запоминается в браузере.
+- **SQLite-история**: `scans_history`, `monitor_state`, `ip_reputation_cache` и кэш превью переживают рестарт при постоянном `DATA_DIR`. Без `node:sqlite` автоматически включается JSON-fallback.
+- **Защищённый монитор**: публичный `GET /api/monitor` отдаёт только сжатый статус; цели, история и тест доступны лишь с заголовком `X-Monitor-Token`, совпадающим с `MONITOR_TOKEN`.
+
+## Переменные окружения
+
+Все секреты задаются только в окружении сервера и никогда не возвращаются в API или браузер.
+
+| Переменная | По умолчанию | Значение |
+| --- | --- | --- |
+| `MONITOR_TOKEN` | — | Секрет для `X-Monitor-Token`: включает админский `/api/monitor`, `/api/monitor/test` и `/api/monitor/run`. Без него эти маршруты отвечают `404` |
+| `DATA_DIR` | `.data` | Каталог SQLite/JSON. На Render укажи путь постоянного диска, иначе история исчезнет при редеплое |
+| `ABUSEIPDB_API_KEY` | — | Ключ AbuseIPDB. Без него репутация выключена, инспектор не показывает шкалу |
+| `ABUSEIPDB_MAX_AGE_DAYS` | `90` | Глубина отчётов AbuseIPDB, 1–365 дней |
+| `PREVIEW_ENABLED` | `1` | `0` — полностью выключить скриншоты |
+| `CHROME_PATH` | авто | Путь к Chrome/Chromium. Иначе сервер ищет `.chrome/` и системные браузеры |
+| `PUPPETEER_EXECUTABLE_PATH` | — | Альтернатива `CHROME_PATH` |
+| `GARBAGE_LIMIT` | `12` | Лимит поисков случайной цели в минуту на IP |
+| `MAX_ACTIVE_PICKS` | `3` | Одновременных поисков Trash Mode |
+| `GARBAGE_SITES` | — | Дополнительные домены для Trash Mode через запятую |
+| `GARBAGE_POOL_URL` | — | URL JSON-пула доменов (`["example.com", …]`), кэш 6 ч |
+
+Мониторинг, Telegram-бот и алерты описаны в [docs/MONITORING.md](docs/MONITORING.md). Сайт можно добавить в мониторинг, просто отправив его боту в личные сообщения: `/add example.com`.
+
 ## Быстрый старт
 
 ```bash
@@ -48,13 +81,14 @@ npm install
 npm run dev
 # → http://localhost:5173
 
+# скриншоты веб-портов (необязательно, ~80 МБ)
+npm run preview:install
+
 # production
 npm run build
 npm start
 # → http://127.0.0.1:8787
 ```
 
-Требуется Node.js 20+.
+Требуется Node.js 20+. Рекомендуется Node 24: на нём `node:sqlite` работает без флагов, и история хранится в SQLite. На Node без `node:sqlite` автоматически включается JSON-хранилище.
 
-Серверный мониторинг периметра и алерты в Telegram/Discord — [docs/MONITORING.md](docs/MONITORING.md).
-Сайт можно добавить в мониторинг, просто отправив его боту в личные сообщения: `/add example.com`.

@@ -26,6 +26,13 @@ const diffSummary = (change: MonitorChange) => {
 export function MonitorPanel() {
   const [status, setStatus] = useState<MonitorStatus | null>(null)
   const [error, setError] = useState('')
+  const [token, setToken] = useState(() => {
+    try {
+      return window.sessionStorage.getItem('network-map:monitor-token') || ''
+    } catch {
+      return ''
+    }
+  })
   const [test, setTest] = useState<{ status: 'idle' | 'busy' | 'ok' | 'error'; message: string }>({
     status: 'idle',
     message: '',
@@ -33,12 +40,19 @@ export function MonitorPanel() {
   const alive = useRef(true)
 
   useEffect(() => {
+    try {
+      if (token) window.sessionStorage.setItem('network-map:monitor-token', token)
+      else window.sessionStorage.removeItem('network-map:monitor-token')
+    } catch {}
+  }, [token])
+
+  useEffect(() => {
     alive.current = true
     const controller = new AbortController()
 
     const load = async () => {
       try {
-        const data = await fetchMonitor(controller.signal)
+        const data = await fetchMonitor(controller.signal, token.trim() || undefined)
         if (alive.current) {
           setStatus(data)
           setError('')
@@ -59,12 +73,12 @@ export function MonitorPanel() {
       controller.abort()
       window.clearInterval(timer)
     }
-  }, [])
+  }, [token])
 
   const runTest = async () => {
     setTest({ status: 'busy', message: 'Отправляю…' })
     try {
-      await testMonitorAlert()
+      await testMonitorAlert(token.trim() || undefined)
       setTest({ status: 'ok', message: 'Уведомление отправлено' })
     } catch (err) {
       setTest({ status: 'error', message: (err as Error)?.message || 'Не удалось отправить' })
@@ -73,6 +87,7 @@ export function MonitorPanel() {
 
   const enabled = Boolean(status?.enabled)
   const scanAlerts = Boolean(status?.scanAlerts)
+  const admin = Boolean(status?.admin)
   const hasChannel = Boolean(status?.alerts.webhook || status?.alerts.telegram)
   // Without a destination scan alerts only reach the server log, so the panel
   // stays in setup mode until a webhook or Telegram is configured.
@@ -93,6 +108,30 @@ export function MonitorPanel() {
           <i /> {active ? 'ON' : 'OFF'}
         </span>
       </div>
+
+      <div className="monitor-token-row">
+        <label htmlFor="monitor-token">X-MONITOR-TOKEN</label>
+        <input
+          id="monitor-token"
+          className="text-input monitor-token-input"
+          type="password"
+          value={token}
+          onChange={(event) => setToken(event.target.value)}
+          placeholder="токен оператора"
+          spellCheck={false}
+          autoComplete="off"
+        />
+        <span className={`monitor-token-state ${admin ? 'on' : ''}`}>
+          {admin ? 'ADMIN' : token ? 'НЕВЕРНЫЙ' : 'ПУБЛИЧНО'}
+        </span>
+      </div>
+
+      {!admin && (
+        <p className="subdomain-note">
+          Публичный статус: список целей и история изменений скрыты. Введи{' '}
+          <code>X-Monitor-Token</code> из окружения сервера, чтобы увидеть детали и отправлять тест.
+        </p>
+      )}
 
       {error && <p className="import-note error">{error}</p>}
 
@@ -228,12 +267,35 @@ export function MonitorPanel() {
             </div>
           )}
 
+          {status.scans && status.scans.length > 0 && (
+            <div className="monitor-history">
+              <span className="monitor-history-label">ПОСЛЕДНИЕ СКАНЫ · SQLITE</span>
+              {status.scans.slice(0, 5).map((scan) => (
+                <div className="monitor-change" key={`${scan.at}-${scan.target}`}>
+                  <em>{timeOf(scan.at)}</em>
+                  <b>{scan.target}</b>
+                  <span>
+                    {scan.source === 'monitor' ? 'монитор' : 'UI'} ·{' '}
+                    {Array.isArray(scan.ports) ? `${scan.ports.length} порт.` : '—'}
+                    {Array.isArray(scan.nodes) ? ` · ${scan.nodes.length} IP` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
           <button
             type="button"
             className="btn ghost small monitor-test"
             onClick={() => void runTest()}
-            disabled={!hasChannel || test.status === 'busy'}
-            title={hasChannel ? 'Отправить тестовое уведомление в настроенные каналы' : 'Сначала задай вебхук или Telegram в окружении'}
+            disabled={!admin || !hasChannel || test.status === 'busy'}
+            title={
+              !admin
+                ? 'Нужен X-Monitor-Token с сервера'
+                : hasChannel
+                  ? 'Отправить тестовое уведомление в настроенные каналы'
+                  : 'Сначала задай вебхук или Telegram в окружении'
+            }
           >
             {test.status === 'busy' ? <span className="spinner" /> : '⌁'} ТЕСТ УВЕДОМЛЕНИЯ
           </button>

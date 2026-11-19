@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber'
 import { Grid, Line, OrbitControls } from '@react-three/drei'
@@ -33,6 +33,10 @@ interface SceneProps {
   focusIps: string[]
   focusSignal: number
   onScanSubdomain: (name: string) => void
+  /** Trash Mode is picking a random target: show the debris cloud. */
+  trashMode?: boolean
+  /** Increment to trigger the cinematic warp fly-through. */
+  warpSignal?: number
 }
 
 export function Scene(props: SceneProps) {
@@ -67,6 +71,8 @@ function SceneContent({
   focusIps,
   focusSignal,
   onScanSubdomain,
+  trashMode = false,
+  warpSignal = 0,
 }: SceneProps) {
   const layout = useMemo(
     () => buildLayout(model, cluster),
@@ -77,6 +83,15 @@ function SceneContent({
   const cves = useMemo(() => collectCves(model), [model.ips])
   const vulnerablePorts = useMemo(() => cvePortSet(cves), [cves])
   const vulnerableIps = useMemo(() => new Set(cves.map((match) => match.ip)), [cves])
+  const [warping, setWarping] = useState(false)
+
+  // Keep the effect on long enough for the camera to finish its dive.
+  useEffect(() => {
+    if (!warpSignal) return
+    setWarping(true)
+    const id = window.setTimeout(() => setWarping(false), 2700)
+    return () => window.clearTimeout(id)
+  }, [warpSignal])
 
   const focusSet = useMemo(
     () => (focusIps.length ? new Set(focusIps) : null),
@@ -108,6 +123,8 @@ function SceneContent({
         hasSelection={selection != null}
         focusPoints={focusPoints}
         focusSignal={focusSignal}
+        warpSignal={warpSignal}
+        warping={warping}
       />
 
       <Starfield />
@@ -115,6 +132,8 @@ function SceneContent({
       <GroundGrid />
       <RadarRings />
       <OrbitalShell />
+      <JunkCloud active={trashMode} warping={warping} />
+      <WarpLines active={warping} />
 
       <CoreNode
         model={model}
@@ -264,6 +283,8 @@ function CameraRig({
   hasSelection,
   focusPoints,
   focusSignal,
+  warpSignal,
+  warping,
 }: {
   mode: 'orbit' | 'fly'
   onExitFly: () => void
@@ -271,23 +292,46 @@ function CameraRig({
   hasSelection: boolean
   focusPoints: THREE.Vector3[]
   focusSignal: number
+  warpSignal: number
+  warping: boolean
 }) {
   const controls = useRef<any>(null)
-  const { camera } = useThree()
+  const camera = useThree((state) => state.camera) as THREE.PerspectiveCamera
   const desired = useRef(new THREE.Vector3(0, CORE_Y, 0))
   const offset = useRef(new THREE.Vector3(0, 8, 24))
   const flying = useRef(false)
+  const warp = useRef<{ at: number; from: THREE.Vector3 } | null>(null)
+  const BASE_FOV = 48
+  const WARP_MS = 2400
 
   useEffect(() => {
     if (!resetSignal) return
     camera.position.set(0, 25, 54)
     camera.lookAt(0, CORE_Y, 0)
+    camera.fov = BASE_FOV
+    camera.updateProjectionMatrix()
+    warp.current = null
     flying.current = false
     if (controls.current) {
       controls.current.target.set(0, CORE_Y, 0)
       controls.current.update()
     }
   }, [resetSignal, camera])
+
+  // A warp starts from wherever the camera currently is and dives through the
+  // debris cloud into the target core.
+  useEffect(() => {
+    if (!warpSignal) return
+    warp.current = { at: performance.now(), from: camera.position.clone() }
+    flying.current = false
+  }, [warpSignal, camera])
+
+  useEffect(() => {
+    if (warping) return
+    warp.current = null
+    camera.fov = BASE_FOV
+    camera.updateProjectionMatrix()
+  }, [warping, camera])
 
   useEffect(() => {
     if (!focusPoints.length) {
@@ -307,6 +351,32 @@ function CameraRig({
 
   useFrame(() => {
     const control = controls.current
+
+    if (warp.current) {
+      const t = Math.min(1, (performance.now() - warp.current.at) / WARP_MS)
+      // Ease-out so the last metres feel like the camera is braking.
+      const ease = 1 - Math.pow(1 - t, 2.6)
+      const goal = new THREE.Vector3(0, CORE_Y + 8, 24)
+      const pos = warp.current.from.clone().lerp(goal, ease)
+      const swirl = (1 - t) * 9
+      pos.x += Math.sin(t * Math.PI * 3.4) * swirl
+      pos.y += Math.cos(t * Math.PI * 2.2) * swirl * 0.5
+      camera.position.copy(pos)
+      camera.lookAt(0, CORE_Y, 0)
+      camera.fov = BASE_FOV + Math.sin(t * Math.PI) * 34
+      camera.updateProjectionMatrix()
+      if (t >= 1) {
+        warp.current = null
+        camera.fov = BASE_FOV
+        camera.updateProjectionMatrix()
+        if (control) {
+          control.target.set(0, CORE_Y, 0)
+          control.update()
+        }
+      }
+      return
+    }
+
     if (!flying.current || !control) return
     control.target.lerp(desired.current, 0.09)
     const goal = desired.current.clone().add(offset.current)
@@ -319,7 +389,7 @@ function CameraRig({
     <>
       <OrbitControls
         ref={controls}
-        enabled={mode === 'orbit'}
+        enabled={mode === 'orbit' && !warping}
         target={[0, CORE_Y, 0]}
         enableDamping
         dampingFactor={0.06}
@@ -329,9 +399,10 @@ function CameraRig({
         minDistance={8}
         maxDistance={165}
         maxPolarAngle={Math.PI * 0.495}
-        autoRotate={mode === 'orbit' && !hasSelection}
+        autoRotate={mode === 'orbit' && !hasSelection && !warping}
         autoRotateSpeed={0.3}
         onStart={() => {
+          if (warp.current) return
           flying.current = false
         }}
       />
@@ -339,6 +410,7 @@ function CameraRig({
     </>
   )
 }
+
 
 /* ------------------------------------------------------------------ */
 /*  environment                                                        */
@@ -443,6 +515,158 @@ function DustField() {
         />
       </points>
     </group>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  trash-mode debris cloud & warp lines                               */
+/* ------------------------------------------------------------------ */
+
+const JUNK_PALETTE = ['#8a4a22', '#c46a2d', '#ff8a3d', '#5b5b62', '#7a7368', '#a39a8c']
+
+function JunkCloud({ active, warping }: { active: boolean; warping: boolean }) {
+  const group = useRef<THREE.Group>(null)
+
+  const { positions, colors } = useMemo(() => {
+    let seed = 4242
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296
+      return seed / 4294967296
+    }
+    const count = 1100
+    const pos = new Float32Array(count * 3)
+    const col = new Float32Array(count * 3)
+    const palette = JUNK_PALETTE.map((value) => new THREE.Color(value))
+    for (let i = 0; i < count; i++) {
+      const angle = rand() * Math.PI * 2
+      // A torn ring rather than a sphere: debris drifts around the map plane.
+      const radius = 16 + Math.pow(rand(), 0.72) * 76
+      const y = (rand() - 0.32) * (12 + radius * 0.7)
+      pos[i * 3] = Math.cos(angle) * radius
+      pos[i * 3 + 1] = y
+      pos[i * 3 + 2] = Math.sin(angle) * radius
+      const tint = palette[Math.floor(rand() * palette.length)]
+      const dim = 0.45 + rand() * 0.55
+      col[i * 3] = tint.r * dim
+      col[i * 3 + 1] = tint.g * dim
+      col[i * 3 + 2] = tint.b * dim
+    }
+    return { positions: pos, colors: col }
+  }, [])
+
+  useFrame((_, delta) => {
+    if (!group.current) return
+    group.current.rotation.y += delta * (warping ? 0.9 : 0.045)
+    group.current.rotation.x = Math.sin(performance.now() * 0.00006) * 0.06
+  })
+
+  return (
+    <group ref={group} visible={active || warping}>
+      <points>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+          <bufferAttribute attach="attributes-color" args={[colors, 3]} />
+        </bufferGeometry>
+        <pointsMaterial
+          vertexColors
+          size={warping ? 0.52 : 0.34}
+          sizeAttenuation
+          transparent
+          opacity={warping ? 0.95 : 0.62}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </points>
+      <points rotation={[0.7, 1.9, 0]}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        </bufferGeometry>
+        <pointsMaterial
+          color="#c46a2d"
+          size={warping ? 0.9 : 0.6}
+          sizeAttenuation
+          transparent
+          opacity={warping ? 0.42 : 0.22}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          toneMapped={false}
+        />
+      </points>
+      {/* a few larger rusty shards */}
+      {Array.from({ length: 12 }).map((_, index) => {
+        const angle = (index / 12) * Math.PI * 2 + 0.4
+        const radius = 22 + ((index * 13) % 46)
+        return (
+          <mesh
+            key={`shard-${index}`}
+            position={[Math.cos(angle) * radius, ((index % 5) - 2) * 7, Math.sin(angle) * radius]}
+            rotation={[index * 0.7, index * 0.4, index * 0.9]}
+          >
+            <tetrahedronGeometry args={[0.55 + (index % 3) * 0.35, 0]} />
+            <meshBasicMaterial
+              color={index % 2 === 0 ? '#8a4a22' : '#5b5b62'}
+              transparent
+              opacity={warping ? 0.75 : 0.45}
+              wireframe={index % 3 === 0}
+              toneMapped={false}
+            />
+          </mesh>
+        )
+      })}
+    </group>
+  )
+}
+
+function WarpLines({ active }: { active: boolean }) {
+  const ref = useRef<THREE.LineSegments>(null)
+  const geometry = useMemo(() => {
+    const geo = new THREE.BufferGeometry()
+    let seed = 777
+    const rand = () => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296
+      return seed / 4294967296
+    }
+    const count = 140
+    const arr = new Float32Array(count * 6)
+    for (let i = 0; i < count; i++) {
+      const angle = rand() * Math.PI * 2
+      const radius = 4 + rand() * 62
+      const x = Math.cos(angle) * radius
+      const y = (rand() - 0.35) * 46
+      const z = -190 + rand() * 230
+      const length = 5 + rand() * 18
+      arr[i * 6] = x
+      arr[i * 6 + 1] = y
+      arr[i * 6 + 2] = z
+      arr[i * 6 + 3] = x
+      arr[i * 6 + 4] = y
+      arr[i * 6 + 5] = z + length
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(arr, 3))
+    return geo
+  }, [])
+
+  useFrame((_, delta) => {
+    if (!active) return
+    const attribute = geometry.getAttribute('position') as THREE.BufferAttribute
+    const arr = attribute.array as Float32Array
+    const speed = delta * 190
+    for (let i = 0; i < arr.length; i += 6) {
+      arr[i + 2] += speed
+      arr[i + 5] += speed
+      if (arr[i + 2] > 90) {
+        arr[i + 2] -= 300
+        arr[i + 5] -= 300
+      }
+    }
+    attribute.needsUpdate = true
+    if (ref.current) ref.current.rotation.z += delta * 0.06
+  })
+
+  return (
+    <lineSegments ref={ref} geometry={geometry} visible={active}>
+      <lineBasicMaterial color="#ff8a3d" transparent opacity={0.55} depthWrite={false} toneMapped={false} />
+    </lineSegments>
   )
 }
 

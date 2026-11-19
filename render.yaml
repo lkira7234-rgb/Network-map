@@ -4,13 +4,13 @@ services:
     runtime: node
     plan: free
     region: frankfurt
-    buildCommand: npm ci --include=dev && npm run build
+    buildCommand: npm ci --include=dev && npm run build && (npm run preview:install || echo "preview browser skipped")
     startCommand: npm start
     healthCheckPath: /api/health
     autoDeploy: true
     envVars:
       - key: NODE_VERSION
-        value: 22.12.0
+        value: 24.18.0
       # Do not set NODE_ENV=production here: it makes npm skip devDependencies
       # (vite/typescript) during the build step. Render sets it at runtime.
       # Render terminates TLS in front of the service.
@@ -54,3 +54,27 @@ services:
       #   sync: false
       # - key: ALERT_TELEGRAM_CHAT
       #   sync: false
+      # Operator token for admin monitor endpoints (full status, test, run).
+      # Without it they answer 404; the public status stays available.
+      # - key: MONITOR_TOKEN
+      #   sync: false
+      # Persistent history. Mount a Render Disk at /var/data and point DATA_DIR
+      # there; otherwise SQLite lives only until the next redeploy.
+      # - key: DATA_DIR
+      #   value: /var/data
+      # AbuseIPDB reputation (optional). Cached for 24 hours.
+      # - key: ABUSEIPDB_API_KEY
+      #   sync: false
+      # - key: ABUSEIPDB_MAX_AGE_DAYS
+      #   value: "90"
+      # Screenshots of web ports. The build installs headless Chromium into
+      # .chrome/; set PREVIEW_ENABLED=0 to skip, or CHROME_PATH for your own.
+      # - key: PREVIEW_ENABLED
+      #   value: "1"
+      # - key: CHROME_PATH
+      #   value: /usr/bin/chromium
+      # Trash Mode limits.
+      # - key: GARBAGE_LIMIT
+      #   value: "12"
+      # - key: MAX_ACTIVE_PICKS
+      #   value: "3"

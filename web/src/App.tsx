@@ -4,16 +4,46 @@ import { Hud } from './components/Hud'
 import { Spotlight } from './components/Spotlight'
 import { initialState } from './types'
 import { scanReducer } from './model'
-import { RateLimitInfo, fetchSubdomains, streamDemo, streamScan } from './api'
+import { RateLimitInfo, GarbageKind, GarbagePick, fetchGarbage, fetchSubdomains, streamDemo, streamScan } from './api'
 import { DEFAULT_FORM, ScanFormValues, formFromUrl, formToUrl } from './form'
 import { ScanEvent, ScanState, Selection, SubdomainInfo, SubdomainState } from './types'
 import { ClusterMode } from './layout'
 import { HistoryResult, clearHistory, recordScan } from './history'
 import { SearchResult } from './search'
+import { audio } from './audio'
 
 const errorMessage = (error: unknown) => {
   if (error instanceof Error) return error.message
   return 'Неизвестная ошибка'
+}
+
+export interface GarbageState {
+  status: 'idle' | 'picking' | 'ok' | 'error'
+  message: string
+  target?: string
+}
+
+const formatBytes = (value?: number) => {
+  if (!value || !Number.isFinite(value)) return null
+  return value >= 1024 ? `${(value / 1024).toFixed(1)} КБ` : `${Math.round(value)} Б`
+}
+
+function describeGarbage(pick: GarbagePick) {
+  const verify = pick.verify || {}
+  if (pick.kind === 'dns') {
+    const domain = verify.domain ? ` · домен ${verify.domain}` : ''
+    return `живой DNS ${pick.target}${domain}${verify.tcp53 ? ' · 53/tcp открыт' : ''}`
+  }
+  if (pick.kind === 'ip') {
+    const source = verify.domain ? ` · ${verify.domain}` : ''
+    const port = verify.port ? ` · открыт ${verify.port}/tcp` : ''
+    return `живой IP ${pick.target}${source}${port}`
+  }
+  const size = formatBytes(verify.bytes)
+  const title = verify.title ? ` · «${verify.title}»` : ''
+  return `живой сайт ${pick.target}${verify.http ? ` · HTTP ${verify.http}` : ''}${
+    size ? ` · ${size}` : ''
+  }${title}`
 }
 
 const cleanHost = (value: string) =>
@@ -75,6 +105,10 @@ export function App() {
   const [focusSignal, setFocusSignal] = useState(0)
   const [spotlightOpen, setSpotlightOpen] = useState(false)
   const [history, setHistory] = useState<HistoryResult | null>(null)
+  const [garbage, setGarbage] = useState<GarbageState>({ status: 'idle', message: '' })
+  const [soundOn, setSoundOn] = useState(() => audio.readPreference())
+  const [trashMode, setTrashMode] = useState(false)
+  const [warpSignal, setWarpSignal] = useState(0)
   const [initial] = useState<ScanFormValues>(
     () => formFromUrl(window.location.search) || DEFAULT_FORM,
   )
@@ -82,7 +116,12 @@ export function App() {
   const bufferRef = useRef<ScanEvent[]>([])
   const timerRef = useRef<number | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const garbageAbortRef = useRef<AbortController | null>(null)
   const subAbortRef = useRef<AbortController | null>(null)
+  const warpTimerRef = useRef<number | null>(null)
+  const openPortsRef = useRef(0)
+  const portSoundAtRef = useRef(0)
+  const alarmRef = useRef(false)
   const runIdRef = useRef(0)
   const bootedRef = useRef(false)
   const lastFormRef = useRef<ScanFormValues>(initial)
@@ -120,10 +159,45 @@ export function App() {
   useEffect(() => {
     return () => {
       abortRef.current?.abort()
+      garbageAbortRef.current?.abort()
       subAbortRef.current?.abort()
       if (timerRef.current != null) window.clearTimeout(timerRef.current)
+      if (warpTimerRef.current != null) window.clearTimeout(warpTimerRef.current)
     }
   }, [])
+
+  // Sound preference is persisted by the engine and applied on mount.
+  useEffect(() => {
+    audio.setEnabled(soundOn)
+  }, [soundOn])
+
+  // UI feedback: node clicks, newly opened ports and high-severity findings.
+  useEffect(() => {
+    if (selection) audio.play('click')
+  }, [selection])
+
+  useEffect(() => {
+    if (model.phase === 'scanning' || model.phase === 'done') {
+      const open = model.ips.reduce(
+        (total, ip) => total + Object.values(ip.ports).filter((port) => port.state === 'open').length,
+        0,
+      )
+      if (open > openPortsRef.current) {
+        // Streamed ports arrive in bursts; throttle the blip instead of playing
+        // one tone per port on a 1000-port scan.
+        const now = Date.now()
+        if (now - portSoundAtRef.current > 320) {
+          audio.play('port')
+          portSoundAtRef.current = now
+        }
+      }
+      openPortsRef.current = open
+    } else if (model.phase === 'idle') {
+      openPortsRef.current = 0
+      portSoundAtRef.current = 0
+      alarmRef.current = false
+    }
+  }, [model.phase, model.ips])
 
   const begin = useCallback((target: string, demo: boolean, keepSubdomains = false) => {
     abortRef.current?.abort()
@@ -142,6 +216,8 @@ export function App() {
       setSubState({ status: 'idle', message: '' })
     }
     hostRef.current = host
+    openPortsRef.current = 0
+    portSoundAtRef.current = 0
     setSelection(null)
     setHover(null)
     setFocusIps([])
@@ -195,6 +271,59 @@ export function App() {
       if (runIdRef.current === id) flushNow()
     }
   }, [begin, enqueue, flushNow])
+
+  const runGarbage = useCallback(
+    async (kind: GarbageKind) => {
+      garbageAbortRef.current?.abort()
+      const controller = new AbortController()
+      garbageAbortRef.current = controller
+      if (warpTimerRef.current != null) {
+        window.clearTimeout(warpTimerRef.current)
+        warpTimerRef.current = null
+      }
+      setTrashMode(true)
+      setGarbage({
+        status: 'picking',
+        message:
+          kind === 'auto'
+            ? 'Ищу случайную живую цель — сайт, DNS или IP…'
+            : `Ищу живую цель: ${
+                kind === 'site' ? 'сайт без заглушки' : kind === 'dns' ? 'DNS-сервер' : 'публичный IP'
+              }…`,
+      })
+      try {
+        const pick = await fetchGarbage(kind, controller.signal)
+        if (garbageAbortRef.current !== controller) return
+        if (!pick.ok || !pick.target) {
+          setTrashMode(false)
+          setGarbage({
+            status: 'error',
+            message: pick.error || 'Не нашёл живую цель. Попробуй ещё раз.',
+          })
+          return
+        }
+        setGarbage({ status: 'ok', message: describeGarbage(pick), target: pick.target })
+        // Cinematic warp runs while the new scan starts streaming.
+        audio.play('warp')
+        setWarpSignal((value) => value + 1)
+        warpTimerRef.current = window.setTimeout(() => {
+          warpTimerRef.current = null
+          setTrashMode(false)
+        }, 2900)
+        const values = { ...lastFormRef.current, target: pick.target }
+        lastFormRef.current = values
+        await runScan(values)
+      } catch (error) {
+        if ((error as Error)?.name === 'AbortError') return
+        if (garbageAbortRef.current !== controller) return
+        setTrashMode(false)
+        setGarbage({ status: 'error', message: errorMessage(error) })
+      } finally {
+        if (garbageAbortRef.current === controller) garbageAbortRef.current = null
+      }
+    },
+    [runScan],
+  )
 
   const importScan = useCallback(
     (events: ScanEvent[], target: string) => {
@@ -325,6 +454,13 @@ export function App() {
     runIdRef.current++
     abortRef.current?.abort()
     abortRef.current = null
+    garbageAbortRef.current?.abort()
+    garbageAbortRef.current = null
+    if (warpTimerRef.current != null) {
+      window.clearTimeout(warpTimerRef.current)
+      warpTimerRef.current = null
+    }
+    setTrashMode(false)
     flushNow()
     dispatch({ type: 'cancel' })
   }, [flushNow])
@@ -377,6 +513,8 @@ export function App() {
         focusIps={focusIps}
         focusSignal={focusSignal}
         onScanSubdomain={scanSubdomain}
+        trashMode={trashMode}
+        warpSignal={warpSignal}
       />
       <Hud
         model={model}
@@ -404,6 +542,10 @@ export function App() {
         onStop={stop}
         onToggleMode={toggleMode}
         onResetCamera={resetCamera}
+        garbage={garbage}
+        onGarbage={runGarbage}
+        soundOn={soundOn}
+        onToggleSound={() => setSoundOn((value) => !value)}
       />
       <Spotlight
         open={spotlightOpen}

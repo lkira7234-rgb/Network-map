@@ -598,3 +598,262 @@ export function printHtmlReport(html: string) {
   }
   frame.srcdoc = html
 }
+
+/* ------------------------------------------------------------------ */
+/*  Markdown report (Obsidian / Notion)                                */
+/* ------------------------------------------------------------------ */
+
+const mdCell = (value: unknown) =>
+  String(value ?? '')
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/\r?\n/g, ' ')
+    .trim() || '—'
+
+const mdCode = (value: unknown) => {
+  const text = String(value ?? '').trim()
+  if (!text || text === '—') return '—'
+  return `\`${text.replace(/`/g, "'")}\``
+}
+
+function mdTable(headers: string[], rows: string[][]): string {
+  if (!rows.length) return '_нет данных_'
+  return [
+    `| ${headers.join(' | ')} |`,
+    `| ${headers.map(() => '---').join(' | ')} |`,
+    ...rows.map((row) => `| ${row.join(' | ')} |`),
+  ].join('\n')
+}
+
+/**
+ * Markdown export for pentest notes. Contains the same data as the HTML/JSON
+ * report but stays readable in Obsidian, Notion and plain Git diffs.
+ */
+export function buildMarkdown(model: ScanState): string {
+  const doc = buildReport(model)
+  const summary = doc.summary
+  const host = model.host || model.target || 'scan'
+  const lines: string[] = []
+
+  lines.push(`# NETWORK//MAP — ${host}`)
+  lines.push('')
+  lines.push(
+    `> ${model.demo ? 'demo scan' : 'live scan'} · ${doc.generatedAt.replace('T', ' ').slice(0, 19)} UTC · target \`${model.target || host}\``,
+  )
+  lines.push('')
+
+  if (summary) {
+    lines.push('## Сводка')
+    lines.push('')
+    lines.push(
+      mdTable(
+        ['Параметр', 'Значение'],
+        summary.providers.map((item) => [mdCell(item.label), mdCode(item.value)]),
+      ),
+    )
+    lines.push('')
+    if (summary.cert) {
+      lines.push(
+        `**TLS:** ${mdCell(summary.cert.issuer)} · ${mdCell(summary.cert.protocol)} · ${
+          summary.cert.expired
+            ? 'срок истёк'
+            : summary.cert.days != null
+              ? `${summary.cert.days} дн. до истечения`
+              : mdCell(summary.cert.validTo)
+        }`,
+      )
+      lines.push('')
+    }
+    lines.push(
+      `**Заголовки безопасности:** ${summary.hygiene
+        .map((flag) => `${flag.ok ? '✓' : '✕'} ${flag.label}`)
+        .join(' · ')} (${summary.hygieneOk}/${summary.hygiene.length})`,
+    )
+    lines.push('')
+  }
+
+  const dnsRows: string[][] = []
+  const dns = model.dns
+  const pushDns = (type: string, values: string[]) => {
+    for (const value of values) dnsRows.push([type, mdCode(value)])
+  }
+  pushDns('A', dns.a.map((entry) => entry.address))
+  pushDns('AAAA', dns.aaaa.map((entry) => entry.address))
+  pushDns('CNAME', dns.cname)
+  pushDns('NS', dns.ns)
+  pushDns('MX', dns.mx.map((entry) => `${entry.priority} ${entry.exchange}`))
+  pushDns('TXT', dns.txt)
+  if (dns.soa) pushDns('SOA', [JSON.stringify(dns.soa)])
+  if (dnsRows.length) {
+    lines.push('## DNS')
+    lines.push('')
+    lines.push(mdTable(['Тип', 'Значение'], dnsRows))
+    lines.push('')
+  }
+
+  if (doc.rdap) {
+    lines.push('## Регистрация (RDAP)')
+    lines.push('')
+    lines.push(
+      mdTable(
+        ['Поле', 'Значение'],
+        [
+          ['Имя', mdCell(doc.rdap.name)],
+          ['Организация', mdCell(doc.rdap.org)],
+          ['Регистратор', mdCell(doc.rdap.registrar)],
+          ['Страна', mdCell(doc.rdap.country)],
+          ['Зарегистрирован', mdCell(doc.rdap.registered)],
+          ['Истекает', mdCell(doc.rdap.expires)],
+          ['NS', mdCell((doc.rdap.nameservers || []).join(', '))],
+        ],
+      ),
+    )
+    lines.push('')
+  }
+
+  for (const ip of doc.ips) {
+    lines.push(`## ${ip.ip}${ip.primary ? ' · основной' : ''}`)
+    lines.push('')
+    lines.push(
+      [
+        `**IPv${ip.family}**`,
+        `PTR: ${mdCode(ip.ptr)}`,
+        `GEO: ${mdCell(fmtGeo(ip.geo))}`,
+        `ASN: ${mdCode(ip.geo?.asn)}`,
+        `Открыто: **${ip.ports.filter((port) => port.state === 'open').length}**`,
+      ].join(' · '),
+    )
+    lines.push('')
+
+    const openPorts = ip.ports.filter((port) => port.state === 'open')
+    if (openPorts.length) {
+      lines.push('### Открытые порты')
+      lines.push('')
+      lines.push(
+        mdTable(
+          ['Порт', 'Протокол', 'Состояние', 'Сервис', 'RTT', 'Баннер'],
+          openPorts.map((port) => [
+            mdCode(port.port),
+            port.protocol.toUpperCase(),
+            mdCell(stateLabel[port.state] || port.state),
+            mdCode(port.service),
+            port.rtt != null ? `${port.rtt} мс` : '—',
+            mdCode(port.banner),
+          ]),
+        ),
+      )
+      lines.push('')
+    }
+
+    if (ip.tech.length) {
+      lines.push(
+        `**Стек:** ${ip.tech
+          .map((hit) => `${hit.name}${hit.version ? ` ${hit.version}` : ''}`)
+          .join(' · ')}`,
+      )
+      lines.push('')
+    }
+
+    if (ip.tls) {
+      lines.push('### TLS')
+      lines.push('')
+      lines.push(
+        mdTable(
+          ['Поле', 'Значение'],
+          [
+            ['Порт', mdCode(ip.tls.port)],
+            ['Издатель', mdCell(ip.tls.issuer)],
+            ['Субъект', mdCell(ip.tls.subject)],
+            ['Протокол', mdCode(ip.tls.protocol)],
+            ['Шифр', mdCode(ip.tls.cipher)],
+            ['Действителен до', mdCell(fmtDate(ip.tls.validTo))],
+            ['SAN', mdCell((ip.tls.altNames || []).slice(0, 12).join(', '))],
+          ],
+        ),
+      )
+      lines.push('')
+    }
+
+    if (ip.http.length) {
+      lines.push('### HTTP')
+      lines.push('')
+      lines.push(
+        mdTable(
+          ['Порт', 'Статус', 'Server', 'Title'],
+          ip.http.map((entry) => [
+            mdCode(entry.port),
+            mdCell(entry.status),
+            mdCode(entry.server),
+            mdCell(entry.title),
+          ]),
+        ),
+      )
+      lines.push('')
+    }
+  }
+
+  if (doc.cves.length) {
+    lines.push('## Потенциальные CVE · эвристика')
+    lines.push('')
+    lines.push(
+      mdTable(
+        ['CVE', 'Уровень', 'Сервис', 'Порт', 'Описание'],
+        doc.cves.map((match) => [
+          mdCode(match.id),
+          mdCell(severityLabel[match.severity] || match.severity),
+          mdCell(`${match.product} ${match.version}`),
+          mdCode(`${match.port}${match.protocol === 'udp' ? '/udp' : ''}`),
+          mdCell(match.summary),
+        ]),
+      ),
+    )
+    lines.push('')
+    lines.push('> Версии взяты из баннеров и могут быть неточными. Это подсказка, не аудит.')
+    lines.push('')
+  }
+
+  if (doc.findings.length) {
+    lines.push('## Базовые проверки и мисконфигурации')
+    lines.push('')
+    lines.push(
+      mdTable(
+        ['Уровень', 'Проверка', 'Узел', 'Детали'],
+        doc.findings.map((finding) => [
+          mdCell(findingLabel[finding.severity] || finding.severity),
+          mdCell(finding.title),
+          mdCode(`${finding.ip}${finding.port ? `:${finding.port}` : ''}${finding.protocol === 'udp' ? '/udp' : ''}`),
+          mdCell(finding.summary),
+        ]),
+      ),
+    )
+    lines.push('')
+    lines.push('> Пассивная проверка конфигурации, без эксплуатации уязвимостей.')
+    lines.push('')
+  }
+
+  if (model.hops.length) {
+    lines.push('## Маршрут')
+    lines.push('')
+    lines.push(
+      mdTable(
+        ['#', 'IP', 'RTT', 'GEO'],
+        model.hops.map((hop) => [
+          mdCode(hop.index),
+          hop.timeout ? '*' : mdCode(hop.ip),
+          hop.rtt != null ? `${hop.rtt} мс` : '—',
+          mdCell(fmtGeo(hop.geo)),
+        ]),
+      ),
+    )
+    lines.push('')
+  }
+
+  lines.push('---')
+  lines.push(
+    `Сгенерировано NETWORK//MAP · ${doc.findings.length} находок · ${doc.cves.length} CVE · проверилось ${model.stats?.scanned ?? 0} портов`,
+  )
+  lines.push('')
+
+  return lines.join('\n')
+}
+

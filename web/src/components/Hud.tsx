@@ -3,9 +3,9 @@ import { ScanEvent, ScanState, Selection, SelectionAction, SubdomainInfo, Subdom
 import { Probe } from './Probe'
 import { MonitorPanel } from './MonitorPanel'
 import { getSelectionDetails, objectSummary, portCounts } from '../model'
-import { RateLimitInfo } from '../api'
+import { GarbageKind, RateLimitInfo, fetchPreview } from '../api'
 import { DEFAULT_FORM, PORT_PRESETS, ScanFormValues, formToUrl } from '../form'
-import { buildHtmlReport, buildReport, downloadText, printHtmlReport, reportFileName } from '../report'
+import { buildHtmlReport, buildMarkdown, buildReport, downloadText, printHtmlReport, reportFileName } from '../report'
 import { plural } from '../nmap'
 import { parseImport } from '../importers'
 import { Severity, collectCves, severityColor, severityLabel } from '../cve'
@@ -13,6 +13,10 @@ import { collectFindings, findingColor, findingLabel } from '../checks'
 import { techCategoryLabel, techColor } from '../tech'
 import { ClusterMode } from '../layout'
 import { HistoryResult, formatSnapshotTime, hasDiff } from '../history'
+import { leakLinks, osintLinks, reputationColor, reputationLabel, reputationLevel } from '../osint'
+import { PocCommand, PocDoc, buildPoc, pocText } from '../poc'
+import { audio } from '../audio'
+import type { GarbageState } from '../App'
 
 interface HudProps {
   model: ScanState
@@ -27,6 +31,8 @@ interface HudProps {
   subState: SubdomainState
   focusIps: string[]
   history: HistoryResult | null
+  garbage: GarbageState
+  soundOn: boolean
   onCluster: (mode: ClusterMode) => void
   onFindSubdomains: () => void
   onScanSubdomain: (name: string) => void
@@ -40,6 +46,8 @@ interface HudProps {
   onStop: () => void
   onToggleMode: () => void
   onResetCamera: () => void
+  onGarbage: (kind: GarbageKind) => void
+  onToggleSound: () => void
 }
 
 const PRESETS = ['github.com', 'cloudflare.com', '1.1.1.1', 'example.com']
@@ -76,6 +84,8 @@ export function Hud({
   subState,
   focusIps,
   history,
+  garbage,
+  soundOn,
   onCluster,
   onFindSubdomains,
   onScanSubdomain,
@@ -89,6 +99,8 @@ export function Hud({
   onStop,
   onToggleMode,
   onResetCamera,
+  onGarbage,
+  onToggleSound,
 }: HudProps) {
   const [target, setTarget] = useState(initial.target || DEFAULT_FORM.target)
   const [ports, setPorts] = useState(initial.ports)
@@ -101,6 +113,17 @@ export function Hud({
   const [shareState, setShareState] = useState<'idle' | 'copied' | 'error'>('idle')
   const [actionNote, setActionNote] = useState<{ id: string; message: string } | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
+  const [trashKind, setTrashKind] = useState<GarbageKind>('auto')
+  const [leaksOpen, setLeaksOpen] = useState(false)
+  const [poc, setPoc] = useState<PocDoc | null>(null)
+  const [pocNote, setPocNote] = useState<string | null>(null)
+  const [preview, setPreview] = useState<{
+    status: 'idle' | 'loading' | 'ok' | 'error' | 'off'
+    message: string
+    image?: string
+    url?: string
+    port?: number
+  }>({ status: 'idle', message: '' })
   const [importState, setImportState] = useState<{
     status: 'idle' | 'busy' | 'ok' | 'error'
     message: string
@@ -110,6 +133,8 @@ export function Hud({
   const errorRef = useRef<HTMLDivElement>(null)
   const reportRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const previewAbort = useRef<AbortController | null>(null)
+  const alarmRef = useRef(false)
   const actionTimer = useRef<number | null>(null)
   const details = getSelectionDetails(model, selection)
   const summary = objectSummary(model)
@@ -124,6 +149,8 @@ export function Hud({
   const hasReport =
     model.phase !== 'idle' &&
     (model.ips.length > 0 || model.hops.length > 0 || model.dns.a.length > 0 || Boolean(model.rdap))
+  const leakDomain =
+    model.host && !/^[0-9.]+$/.test(model.host) && !model.host.includes(':') ? model.host : ''
 
   const resetIn = rateLimit?.resetAt
     ? Math.max(0, Math.ceil((rateLimit.resetAt - Date.now()) / 1000))
@@ -196,6 +223,73 @@ export function Hud({
       document.removeEventListener('keydown', onKey)
     }
   }, [reportOpen])
+
+  // Screenshot of the first open web port of the selected node.
+  const activeIp = details?.ip || null
+  useEffect(() => {
+    previewAbort.current?.abort()
+    if (!activeIp) {
+      setPreview({ status: 'idle', message: '' })
+      return
+    }
+    const entry = model.ips.find((ip) => ip.ip === activeIp)
+    const targetPort =
+      selection?.kind === 'port'
+        ? selection.port
+        : [443, 80, 8443, 8080].find((port) => entry?.ports[`tcp:${port}`]?.state === 'open')
+    if (!targetPort) {
+      setPreview({ status: 'idle', message: '' })
+      return
+    }
+
+    const controller = new AbortController()
+    previewAbort.current = controller
+    setPreview({ status: 'loading', message: `Снимаю превью ${activeIp}:${targetPort}…`, port: targetPort })
+    fetchPreview(activeIp, targetPort, controller.signal)
+      .then((result) => {
+        if (previewAbort.current !== controller) return
+        if (result.ok && result.image) {
+          setPreview({
+            status: 'ok',
+            message: result.cached ? 'из кэша' : `${result.ms ? `${result.ms} мс` : 'готово'}`,
+            image: result.image,
+            url: result.url,
+            port: targetPort,
+          })
+        } else if (result.status === 501 || result.status === 503 || result.status === 404) {
+          setPreview({ status: 'off', message: result.error || 'Headless-браузер недоступен', port: targetPort })
+        } else {
+          setPreview({ status: 'error', message: result.error || 'Не удалось снять превью', port: targetPort })
+        }
+      })
+      .catch((error) => {
+        if ((error as Error)?.name === 'AbortError') return
+        if (previewAbort.current === controller) {
+          setPreview({ status: 'error', message: 'Превью недоступно', port: targetPort })
+        }
+      })
+    return () => controller.abort()
+  }, [activeIp, selection, model.phase])
+
+  useEffect(() => {
+    setLeaksOpen(false)
+  }, [model.host])
+
+  // Alarm only once per completed scan, not on every reducer update.
+  useEffect(() => {
+    if (model.phase === 'idle' || model.phase === 'scanning') {
+      alarmRef.current = false
+      return
+    }
+    if (model.phase !== 'done') return
+    const severe =
+      cves.some((match) => match.severity === 'critical' || match.severity === 'high') ||
+      findings.some((finding) => finding.severity === 'critical' || finding.severity === 'high')
+    if (severe && !alarmRef.current) {
+      alarmRef.current = true
+      audio.play('alarm')
+    }
+  }, [model.phase, cves, findings])
 
   const pickTab = (tab: 'scan' | 'telemetry' | 'inspect') => {
     if (mobileTab === tab && sheetOpen) {
@@ -329,6 +423,41 @@ export function Hud({
     setReportOpen(false)
   }
 
+  const copyMarkdown = async () => {
+    if (!hasReport) return
+    const ok = await copyValue(buildMarkdown(model))
+    setReportOpen(false)
+    flashAction(
+      'markdown',
+      ok
+        ? 'Markdown скопирован — вставляй в Obsidian или Notion'
+        : 'Браузер не дал доступ к буферу обмена',
+    )
+  }
+
+  const openPoc = () => {
+    if (!details) return
+    const targetPort = selection?.kind === 'port' ? selection.port : undefined
+    const entry = details.ip ? model.ips.find((ip) => ip.ip === details.ip) : undefined
+    const service = targetPort && entry ? entry.ports[`tcp:${targetPort}`]?.service : undefined
+    setPocNote(null)
+    setPoc(
+      buildPoc({
+        host: model.host || model.target,
+        ip: details.ip,
+        port: targetPort,
+        service,
+        cves: details.cves,
+        findings: details.findings,
+      }),
+    )
+  }
+
+  const copyPoc = async (code: string, label: string) => {
+    const ok = await copyValue(code)
+    setPocNote(ok ? `${label}: скопировано` : 'Браузер не дал доступ к буферу обмена')
+  }
+
   const elapsed = model.stats?.durationMs ?? (model.startedAt ? Date.now() - model.startedAt : 0)
   const phaseLabel = model.demo && model.phase !== 'idle' ? 'DEMO' : STATUS[model.phase]
 
@@ -375,6 +504,15 @@ export function Hud({
           <div className="panel-head">
             <span>01 / TARGET ACQUISITION</span>
             <div className="panel-head-actions">
+              <button
+                type="button"
+                className={`link-btn sound-btn ${soundOn ? 'on' : ''}`}
+                onClick={onToggleSound}
+                aria-pressed={soundOn}
+                title={soundOn ? 'Выключить ambient и звуковые эффекты' : 'Включить ambient и звуковые эффекты'}
+              >
+                {soundOn ? '♪ SOUND: ON' : '♪ SOUND: OFF'}
+              </button>
               <div className="report-menu" ref={reportRef}>
                 <button
                   type="button"
@@ -400,6 +538,10 @@ export function Hud({
                     <button type="button" role="menuitem" onClick={() => saveReport('json')}>
                       <b>JSON</b>
                       <em>все события и сырые заголовки</em>
+                    </button>
+                    <button type="button" role="menuitem" onClick={() => void copyMarkdown()}>
+                      <b>MARKDOWN</b>
+                      <em>скопировать в Obsidian / Notion</em>
                     </button>
                   </div>
                 )}
@@ -518,6 +660,53 @@ export function Hud({
               <span className="toggle-box" />
               UDP
             </label>
+          </div>
+
+          <div className={`trash-block ${garbage.status}`}>
+            <div className="trash-head">
+              <span className="trash-title">♻ TRASH MODE</span>
+              <span className="trash-hint">случайная живая цель без заглушек</span>
+            </div>
+            <div className="trash-kinds" role="group" aria-label="Тип случайной цели">
+              {(
+                [
+                  ['auto', 'АВТО', 'Сайт, DNS или IP — что найдётся первым'],
+                  ['site', 'САЙТ', 'Живой сайт без парковочной заглушки'],
+                  ['dns', 'DNS', 'Публичный nameserver, отвечающий на 53/tcp'],
+                  ['ip', 'IP', 'Публичный адрес с открытым 80 или 443'],
+                ] as [GarbageKind, string, string][]
+              ).map(([value, label, hint]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`chip ${trashKind === value ? 'active' : ''}`}
+                  onClick={() => setTrashKind(value)}
+                  title={hint}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="btn trash-btn"
+              onClick={() => void onGarbage(trashKind)}
+              disabled={scanning || garbage.status === 'picking'}
+              title="Найти случайный живой хост и сразу запустить полный скан"
+            >
+              {garbage.status === 'picking' ? (
+                <>
+                  <span className="spinner" /> ИЩУ В ЦИФРОВОМ МУСОРЕ…
+                </>
+              ) : (
+                <>♻ НАЙТИ И СКАНУЛЯТЬ</>
+              )}
+            </button>
+            {garbage.message && (
+              <p className={`trash-note ${garbage.status}`}>
+                {garbage.target ? <b>{garbage.target}</b> : null} {garbage.message}
+              </p>
+            )}
           </div>
 
           <div className="actions-row">
@@ -681,6 +870,106 @@ export function Hud({
               ))}
             </div>
 
+            {details.reputation && (
+              <div className={`inspector-block reputation-block ${reputationLevel(details.reputation.score)}`}>
+                <h4 style={{ color: reputationColor(details.reputation.score) }}>
+                  ABUSEIPDB · РЕПУТАЦИЯ
+                </h4>
+                <div
+                  className="rep-bar"
+                  role="meter"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={details.reputation.score}
+                  aria-label="Abuse confidence score"
+                >
+                  <span
+                    style={{
+                      width: `${Math.max(details.reputation.score > 0 ? 3 : 0, details.reputation.score)}%`,
+                      background: reputationColor(details.reputation.score),
+                      boxShadow: `0 0 14px ${reputationColor(details.reputation.score)}`,
+                    }}
+                  />
+                </div>
+                <div className="rep-meta">
+                  <b style={{ color: reputationColor(details.reputation.score) }}>
+                    {details.reputation.score}%
+                  </b>
+                  <span>{reputationLabel(details.reputation)}</span>
+                  <em>{details.reputation.cached ? 'кэш 24ч' : 'live'}</em>
+                </div>
+                {details.reputation.score > 50 && (
+                  <p className="rep-warn">
+                    ⚠ Высокий abuse-score: адрес часто фигурирует в атаках. Не открывай сервисы
+                    доверенно и проверь логи.
+                  </p>
+                )}
+                <div className="rep-grid">
+                  <span>
+                    REPORTS <b>{details.reputation.totalReports ?? '—'}</b>
+                  </span>
+                  <span>
+                    USERS <b>{details.reputation.distinctUsers ?? '—'}</b>
+                  </span>
+                  <span>
+                    COUNTRY <b>{details.reputation.country || '—'}</b>
+                  </span>
+                  <span>
+                    USAGE <b>{details.reputation.usageType || '—'}</b>
+                  </span>
+                </div>
+                {details.reputation.lastReportedAt && (
+                  <p className="rep-note">
+                    Последний отчёт: {String(details.reputation.lastReportedAt).replace('T', ' ').slice(0, 16)}
+                    {details.reputation.isp ? ` · ${details.reputation.isp}` : ''}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {(details.ip || (details.osint && details.osint.length > 0)) && (
+              <div className="inspector-block osint-block">
+                <h4 style={{ color: '#38f6ff' }}>OSINT · ВНЕШНЯЯ РАЗВЕДКА</h4>
+                <div className="link-row">
+                  {(details.osint || osintLinks(details.ip)).map((link) => (
+                    <a
+                      key={link.id}
+                      href={link.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={link.hint}
+                    >
+                      {link.label} ↗
+                    </a>
+                  ))}
+                </div>
+                <p className="osint-note">
+                  Ссылки открываются в новой вкладке и ведут напрямую в сервис, не через сервер.
+                </p>
+              </div>
+            )}
+
+            {preview.status === 'loading' && (
+              <p className="preview-note loading">
+                <span className="spinner" /> {preview.message}
+              </p>
+            )}
+
+            {preview.status === 'ok' && preview.image && (
+              <figure className="preview-block">
+                <div className="preview-head">
+                  <span>WEB PREVIEW · :{preview.port}</span>
+                  <em>{preview.message}</em>
+                </div>
+                <a href={preview.url} target="_blank" rel="noopener noreferrer">
+                  <img src={preview.image} alt={`Скриншот ${details.ip}:${preview.port}`} loading="lazy" />
+                </a>
+                {preview.url && <figcaption>{preview.url}</figcaption>}
+              </figure>
+            )}
+
+            {preview.status === 'error' && <p className="preview-note error">{preview.message}</p>}
+
             {details.actions && details.actions.length > 0 && (
               <div className="inspector-block quick-actions">
                 <h4 style={{ color: '#49ff9e' }}>DIRECT CONNECT</h4>
@@ -810,6 +1099,17 @@ export function Hud({
               </div>
             )}
 
+            {(Boolean(details.cves?.length) || Boolean(details.findings?.length)) && (
+              <button
+                type="button"
+                className="btn ghost small poc-generate"
+                onClick={openPoc}
+                title="Безопасная команда curl/Python для проверки этого хоста и порта"
+              >
+                ⚡ СГЕНЕРИРОВАТЬ PoC
+              </button>
+            )}
+
             {details.packet && (
               <div className="inspector-block packet-block">
                 <h4 style={{ color: '#38f6ff' }}>PACKET · {details.packet.label}</h4>
@@ -895,6 +1195,41 @@ export function Hud({
               ))}
             </div>
               </>
+            )}
+
+            {leakDomain && (
+              <div className="leaks-block">
+                <button
+                  type="button"
+                  className="btn ghost small"
+                  onClick={() => setLeaksOpen((value) => !value)}
+                  aria-expanded={leaksOpen}
+                  title="Открыть реестры утечек и пастов для домена"
+                >
+                  ⌕ SEARCH LEAKS · {leakDomain}
+                </button>
+                {leaksOpen && (
+                  <>
+                    <div className="link-row leak-links">
+                      {leakLinks(leakDomain).map((link) => (
+                        <a
+                          key={link.id}
+                          href={link.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={link.hint}
+                        >
+                          {link.label} ↗
+                        </a>
+                      ))}
+                    </div>
+                    <p className="osint-note">
+                      Открытые реестры утечек и пастов. Часть сервисов требует вход; ссылки ведут
+                      напрямую, сервер запросы не делает.
+                    </p>
+                  </>
+                )}
+              </div>
             )}
 
             {cves.length > 0 && (
@@ -1272,6 +1607,65 @@ export function Hud({
       <div className="corner top-right" />
       <div className="corner bottom-left" />
       <div className="corner bottom-right" />
+
+      {poc && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setPoc(null)}>
+          <div
+            className="poc-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="poc-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="poc-head">
+              <div>
+                <span className="poc-eyebrow">PROOF OF CONCEPT · SAFE MODE</span>
+                <h3 id="poc-title">{poc.title}</h3>
+                <p>{poc.target}</p>
+              </div>
+              <button type="button" className="icon-btn" onClick={() => setPoc(null)} aria-label="Закрыть">
+                ✕
+              </button>
+            </header>
+
+            <div className="poc-list">
+              {poc.commands.map((command: PocCommand) => (
+                <div className="poc-command" key={command.id}>
+                  <div className="poc-command-head">
+                    <span>
+                      <i>{command.language}</i> {command.label}
+                    </span>
+                    <button
+                      type="button"
+                      className="link-btn"
+                      onClick={() => void copyPoc(command.code, command.label)}
+                    >
+                      ⧉ COPY
+                    </button>
+                  </div>
+                  <pre>{command.code}</pre>
+                  {command.note && <p className="poc-command-note">{command.note}</p>}
+                </div>
+              ))}
+            </div>
+
+            <footer className="poc-actions">
+              <button
+                type="button"
+                className="btn primary small"
+                onClick={() => void copyPoc(pocText(poc), 'PoC')}
+              >
+                ⧉ СКОПИРОВАТЬ ВСЁ
+              </button>
+              <button type="button" className="btn ghost small" onClick={() => setPoc(null)}>
+                ЗАКРЫТЬ
+              </button>
+            </footer>
+            {pocNote && <p className="poc-note">{pocNote}</p>}
+            <p className="poc-caveat">{poc.caveat}</p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -3,6 +3,8 @@ dist/
 .env
 *.log
 .DS_Store
+.data/
+.chrome/
 .monitor-state.json
 .bot-state.json
 .render-key

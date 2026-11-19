@@ -13,6 +13,7 @@
     "dev:server": "node --watch server/index.js",
     "build": "vite build",
     "start": "node server/index.js",
+    "preview:install": "browsers install chrome-headless-shell@stable --path .chrome",
     "telegram:chat-id": "node scripts/telegram-chat-id.mjs",
     "render:monitor": "node scripts/render-monitor-setup.mjs",
     "preview": "vite preview"
@@ -39,5 +40,8 @@
     "concurrently": "^9.1.2",
     "typescript": "^5.7.2",
     "vite": "^6.0.7"
+  },
+  "optionalDependencies": {
+    "puppeteer-core": "^25.18.1"
   }
 }
