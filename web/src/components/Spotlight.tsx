@@ -74,7 +74,6 @@ export function Spotlight({ open, model, onClose, onPick }: SpotlightProps) {
       <button type="button" className="spotlight-scrim" aria-label="Закрыть поиск" onClick={onClose} />
       <div className="spotlight-box">
         <div className="spotlight-input-row">
-          <span className="spotlight-prompt">⌕</span>
           <input
             ref={inputRef}
             className="spotlight-input"

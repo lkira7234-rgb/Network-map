@@ -1873,12 +1873,6 @@ select.probe-input {
   transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
-.quick-action i {
-  font-style: normal;
-  font-size: 10px;
-  line-height: 1;
-}
-
 .quick-action:hover {
   color: #04160e;
   background: #49ff9e;
@@ -2150,10 +2144,6 @@ select.probe-input {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.hover-readout span {
-  color: var(--cyan);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2706,12 +2696,6 @@ select.probe-input {
   padding: 7px 8px;
   border: 1px solid rgba(56, 246, 255, 0.22);
   background: rgba(0, 8, 13, 0.72);
-}
-
-.spotlight-prompt {
-  font-size: 14px;
-  color: var(--cyan);
-  text-shadow: 0 0 12px rgba(56, 246, 255, 0.7);
 }
 
 .spotlight-input {
@@ -3298,7 +3282,6 @@ select.probe-input {
   .dock-btn:active:not(:disabled) { background: rgba(56, 246, 255, 0.16); }
 
   .dock-btn.reset { color: #ff8ce9; }
-  .dock-btn.reset .dock-icon { font-size: 17px; line-height: 1; }
 
   /* --- bottom sheets ------------------------------------------------ */
 

@@ -511,7 +511,7 @@ export function Hud({
                 aria-pressed={soundOn}
                 title={soundOn ? 'Выключить ambient и звуковые эффекты' : 'Включить ambient и звуковые эффекты'}
               >
-                {soundOn ? '♪ SOUND: ON' : '♪ SOUND: OFF'}
+                {soundOn ? 'SOUND: ON' : 'SOUND: OFF'}
               </button>
               <div className="report-menu" ref={reportRef}>
                 <button
@@ -523,7 +523,7 @@ export function Hud({
                   aria-expanded={reportOpen}
                   title="Скачать отчёт: HTML, PDF или JSON"
                 >
-                  ⭳ ОТЧЁТ
+                  ОТЧЁТ
                 </button>
                 {reportOpen && (
                   <div className="report-list" role="menu" aria-label="Формат отчёта">
@@ -553,7 +553,7 @@ export function Hud({
                 disabled={!target.trim()}
                 title="Скопировать ссылку на этот скан"
               >
-                {shareState === 'copied' ? '✓ СКОПИРОВАНО' : shareState === 'error' ? '✕ НЕТ ДОСТУПА' : '⧉ ССЫЛКА'}
+                {shareState === 'copied' ? '✓ СКОПИРОВАНО' : shareState === 'error' ? '✕ НЕТ ДОСТУПА' : 'ССЫЛКА'}
               </button>
               <span className={`status-dot ${model.phase}`} />
             </div>
@@ -608,7 +608,7 @@ export function Hud({
               onClick={() => fileRef.current?.click()}
               title="Nmap/Masscan XML, httpx -json, nuclei -jsonl"
             >
-              ↥ XML · HTTPX · NUCLEI
+              XML · HTTPX · NUCLEI
             </button>
             <input
               ref={fileRef}
@@ -632,7 +632,7 @@ export function Hud({
               disabled={model.ips.length === 0 && model.hops.length === 0 && model.dns.ns.length === 0}
               title="Поиск по IP, портам, сервисам, CVE и находкам"
             >
-              ⌕ SPOTLIGHT <kbd>CTRL K</kbd>
+              SPOTLIGHT <kbd>CTRL K</kbd>
             </button>
             <span className="search-hint">фильтр графа</span>
           </div>
@@ -664,7 +664,7 @@ export function Hud({
 
           <div className={`trash-block ${garbage.status}`}>
             <div className="trash-head">
-              <span className="trash-title">♻ TRASH MODE</span>
+              <span className="trash-title">TRASH MODE</span>
               <span className="trash-hint">случайная живая цель без заглушек</span>
             </div>
             <div className="trash-kinds" role="group" aria-label="Тип случайной цели">
@@ -716,7 +716,7 @@ export function Hud({
                   <span className="spinner" /> СКАНИРУЮ…
                 </>
               ) : (
-                <>▶ ЗАПУСТИТЬ СКАН</>
+                <>ЗАПУСТИТЬ СКАН</>
               )}
             </button>
             {scanning ? (
@@ -787,9 +787,9 @@ export function Hud({
                   <span className="spinner" /> ИЩУ…
                 </>
               ) : subdomains.length ? (
-                <>⟳ ОБНОВИТЬ CT</>
+                <>ОБНОВИТЬ CT</>
               ) : (
-                <>⌕ НАЙТИ ПОДДОМЕНЫ</>
+                <>НАЙТИ ПОДДОМЕНЫ</>
               )}
             </button>
             <span className="subdomain-source">crt.sh · TLS SAN</span>
@@ -900,7 +900,7 @@ export function Hud({
                 </div>
                 {details.reputation.score > 50 && (
                   <p className="rep-warn">
-                    ⚠ Высокий abuse-score: адрес часто фигурирует в атаках. Не открывай сервисы
+                    Высокий abuse-score: адрес часто фигурирует в атаках. Не открывай сервисы
                     доверенно и проверь логи.
                   </p>
                 )}
@@ -982,9 +982,6 @@ export function Hud({
                       onClick={() => void runAction(action)}
                       title={action.hint || action.value}
                     >
-                      <i>
-                        {action.kind === 'open' ? '↗' : action.kind === 'copy' ? '⧉' : '⭳'}
-                      </i>
                       {action.label}
                     </button>
                   ))}
@@ -1106,7 +1103,7 @@ export function Hud({
                 onClick={openPoc}
                 title="Безопасная команда curl/Python для проверки этого хоста и порта"
               >
-                ⚡ СГЕНЕРИРОВАТЬ PoC
+                СГЕНЕРИРОВАТЬ PoC
               </button>
             )}
 
@@ -1206,7 +1203,7 @@ export function Hud({
                   aria-expanded={leaksOpen}
                   title="Открыть реестры утечек и пастов для домена"
                 >
-                  ⌕ SEARCH LEAKS · {leakDomain}
+                  SEARCH LEAKS · {leakDomain}
                 </button>
                 {leaksOpen && (
                   <>
@@ -1505,7 +1502,7 @@ export function Hud({
             Введи домен или IP слева, выбери порты и запусти скан — топология соберётся в 3D прямо на глазах.
           </p>
           <button type="button" className="hero-demo" onClick={startDemo}>
-            ▶ ОТКРЫТЬ ДЕМО-КАРТУ
+            ОТКРЫТЬ ДЕМО-КАРТУ
           </button>
         </div>
       )}
@@ -1520,7 +1517,7 @@ export function Hud({
 
       {focusIps.length > 0 && (
         <div className="focus-banner">
-          <span>⌕ ФОКУС: {focusIps.length} узл. · остальные притушены</span>
+          <span>ФОКУС: {focusIps.length} узл. · остальные притушены</span>
           <button type="button" onClick={onClearFocus}>
             ✕ СБРОС
           </button>
@@ -1530,13 +1527,13 @@ export function Hud({
       <div className="bottom-bar">
         <div className="mode-group">
           <button type="button" className={`mode-btn ${mode === 'fly' ? 'active' : ''}`} onClick={onToggleMode}>
-            {mode === 'fly' ? '✈ ПОЛЁТ АКТИВЕН' : '✈ СВОБОДНЫЙ ПОЛЁТ'}
+            {mode === 'fly' ? 'ПОЛЁТ АКТИВЕН' : 'СВОБОДНЫЙ ПОЛЁТ'}
           </button>
           <button type="button" className="mode-btn" onClick={onOpenSpotlight}>
-            ⌕ ПОИСК
+            ПОИСК
           </button>
           <button type="button" className="mode-btn" onClick={onResetCamera}>
-            ⟲ СБРОС
+            СБРОС
           </button>
         </div>
         <div className="hints">
@@ -1545,7 +1542,7 @@ export function Hud({
             : 'ЛКМ вращение · колесо зум · ПКМ панорама'}
         </div>
         <div className="hover-readout" title={hover || ''}>
-          <span>▸</span> {hover || 'наведи на узел'}
+          {hover || 'наведи на узел'}
         </div>
       </div>
 
@@ -1579,7 +1576,6 @@ export function Hud({
           <span className="dock-label">ИНСПЕКТ</span>
         </button>
         <button type="button" className="dock-btn reset" onClick={onResetCamera}>
-          <span className="dock-icon">⟲</span>
           <span className="dock-label">СБРОС</span>
         </button>
       </nav>
@@ -1640,7 +1636,7 @@ export function Hud({
                       className="link-btn"
                       onClick={() => void copyPoc(command.code, command.label)}
                     >
-                      ⧉ COPY
+                      COPY
                     </button>
                   </div>
                   <pre>{command.code}</pre>
@@ -1655,7 +1651,7 @@ export function Hud({
                 className="btn primary small"
                 onClick={() => void copyPoc(pocText(poc), 'PoC')}
               >
-                ⧉ СКОПИРОВАТЬ ВСЁ
+                СКОПИРОВАТЬ ВСЁ
               </button>
               <button type="button" className="btn ghost small" onClick={() => setPoc(null)}>
                 ЗАКРЫТЬ

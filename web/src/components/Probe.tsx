@@ -253,10 +253,10 @@ export function Probe({ model }: { model: ScanState }) {
 
       <div className="probe-row">
         <button type="button" className="btn primary probe-start" onClick={start} disabled={running || blocked}>
-          {running ? 'ИДЁТ…' : '▶ ПУСК'}
+          {running ? 'ИДЁТ…' : 'ПУСК'}
         </button>
         <button type="button" className="btn danger probe-stop" onClick={stop} disabled={!running}>
-          ■ СТОП
+          СТОП
         </button>
         <div className="probe-intervals">
           {INTERVALS.map((option) => (

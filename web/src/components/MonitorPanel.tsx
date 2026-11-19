@@ -297,7 +297,7 @@ export function MonitorPanel() {
                   : 'Сначала задай вебхук или Telegram в окружении'
             }
           >
-            {test.status === 'busy' ? <span className="spinner" /> : '⌁'} ТЕСТ УВЕДОМЛЕНИЯ
+            {test.status === 'busy' ? <span className="spinner" /> : null} ТЕСТ УВЕДОМЛЕНИЯ
           </button>
 
           {test.status !== 'idle' && test.status !== 'busy' && (
