@@ -458,6 +458,15 @@ export function Hud({
     setPocNote(ok ? `${label}: скопировано` : 'Браузер не дал доступ к буферу обмена')
   }
 
+  useEffect(() => {
+    if (!poc) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPoc(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [poc])
+
   const elapsed = model.stats?.durationMs ?? (model.startedAt ? Date.now() - model.startedAt : 0)
   const phaseLabel = model.demo && model.phase !== 'idle' ? 'DEMO' : STATUS[model.phase]
 
@@ -1657,7 +1666,11 @@ export function Hud({
                 ЗАКРЫТЬ
               </button>
             </footer>
-            {pocNote && <p className="poc-note">{pocNote}</p>}
+            {pocNote && (
+              <p className="poc-note" role="status" aria-live="polite">
+                {pocNote}
+              </p>
+            )}
             <p className="poc-caveat">{poc.caveat}</p>
           </div>
         </div>
